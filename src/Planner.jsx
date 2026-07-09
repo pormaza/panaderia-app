@@ -908,7 +908,7 @@ export default function App() {
           {[
             ["¿Qué es?","La temperatura de masa objetivo de 24°C garantiza que levaduras y bacterias lácticas trabajen en equilibrio. 1°C de diferencia altera los tiempos de fermentación significativamente."],
             ["Fórmula para Guayaquil","T°agua = (24×3) − T°ambiente − T°harina − fricción(3). Con 30°C: agua a 9°C. Con 34°C: agua a 1°C (hielo obligatorio)."],
-            ["Masas enriquecidas y DDT","En panes dulces y festivos la DDT sigue siendo 24°C pero la mantequilla fría puede bajar la temperatura de masa — compensar con agua ligeramente menos fría."],
+            [Masas enriquecidas y DDT","En panes dulces y festivos la DDT sigue siendo 24°C pero la mantequilla fría puede bajar la temperatura de masa — compensar con agua ligeramente menos fría."],
           ].map(([t,x])=>(
             <div key={t} style={{marginBottom:"0.85rem"}}>
               <div style={{fontSize:"0.83rem",color:C.accentDark,marginBottom:"0.2rem",fontWeight:"bold"}}>{t}</div>
@@ -920,4 +920,3 @@ export default function App() {
     </div>
   </div>;
 }
-
