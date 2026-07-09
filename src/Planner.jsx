@@ -23,7 +23,7 @@ async function storageSet(key, value) {
     catch(e) { console.error("Storage error:", e); }
   }
 }
-const SK = { recetas:"pan-recetas-v1" };
+const SK = { recetas:"pan-recetas-v1", crono:"pan-crono-v1" };
 
 // ═══════════════════════════════════════════════════════
 // CONSTANTES CIENTÍFICAS
@@ -147,6 +147,49 @@ function calcIngredientes(receta, mult) {
     piezas: piezas * mult,
     sobrante,
     extras: receta.extras.map(e => ({...e, cantGTotal: Math.round(toNum(e.cantG) * mult)})),
+  };
+}
+
+// ─── Cálculo de masa por variantes ───
+function calcMasa(receta) {
+  const harinaG = toNum(receta.harinaKg) * 1000;
+  const agua = harinaG * (toNum(receta.hidratacion) / 100);
+  const mm = harinaG * (toNum(receta.mmPct) / 100);
+  const sal = harinaG * 0.02;
+  const extrasG = (receta.extras||[]).reduce((a,e) => a + toNum(e.cantG), 0);
+  const masaBase = harinaG + agua + mm + sal + extrasG;
+  const perdida = toNum(receta.perdidaCoccion||13) / 100;
+
+  // Variantes: peso crudo por pieza = peso horneado / (1 - perdida)
+  // masa total = suma de (piezas × peso crudo por pieza)
+  const vars = (receta.vars||[]).map(v => {
+    const pesoHorneadoG = toNum(v.pesoG); // peso deseado ya horneado
+    const pesoCrudoG = perdida < 1 ? Math.round(pesoHorneadoG / (1 - perdida)) : pesoHorneadoG;
+    const piezas = toNum(v.piezas||0);
+    const masaNecesaria = piezas * pesoCrudoG;
+    return { ...v, pesoHorneadoG, pesoCrudoG, piezas, masaNecesaria };
+  });
+
+  const masaTotalNecesaria = vars.reduce((a,v) => a + v.masaNecesaria, 0);
+  const factor = masaBase > 0 ? masaTotalNecesaria / masaBase : 0;
+
+  const blanca = harinaG * (toNum(receta.pctBlanca) / 100);
+  const integral = harinaG * (toNum(receta.pctIntegral) / 100);
+
+  return {
+    vars, perdidaPct: Math.round(perdida*100),
+    masaTotalNecesaria: Math.round(masaTotalNecesaria),
+    masaBase: Math.round(masaBase),
+    factor,
+    blanca:   Math.round(blanca   * factor),
+    integral: Math.round(integral * factor),
+    agua:     Math.round(agua     * factor),
+    mm:       Math.round(mm       * factor),
+    sal:      Math.round(sal      * factor),
+    extras:   (receta.extras||[]).map(e => ({...e, cantGTotal: Math.round(toNum(e.cantG) * factor)})),
+    // Porcentajes del panadero (fijos, no cambian)
+    hidratacion: receta.hidratacion,
+    mmPct: receta.mmPct,
   };
 }
 
@@ -315,7 +358,8 @@ const RECETAS_INI = [
   {
     id:"r2", nombre:"Pan dulce de masa madre", tipo:"dulce",
     harinaKg:"3", pctBlanca:"100", pctIntegral:"0",
-    hidratacion:"60", mmPct:"18", pesoPieza:"450",
+    hidratacion:"60", mmPct:"18", perdidaCoccion:"12",
+    vars:[{id:"rv3",nombre:"Pieza 450g",pesoG:"450",piezas:"8"}],
 
     extras:[
       {id:uid(),nombre:"Azúcar",cantG:"300"},
@@ -326,7 +370,8 @@ const RECETAS_INI = [
   {
     id:"r3", nombre:"Focaccia de masa madre", tipo:"tradicional",
     harinaKg:"2", pctBlanca:"100", pctIntegral:"0",
-    hidratacion:"80", mmPct:"20", pesoPieza:"400",
+    hidratacion:"80", mmPct:"20", perdidaCoccion:"10",
+    vars:[{id:"rv4",nombre:"Bandeja 400g",pesoG:"400",piezas:"5"}],
 
     extras:[
       {id:uid(),nombre:"Aceite de oliva",cantG:"120"},
@@ -336,7 +381,8 @@ const RECETAS_INI = [
   {
     id:"r4", nombre:"Rosca de Reyes / Stollen", tipo:"festivo",
     harinaKg:"2", pctBlanca:"100", pctIntegral:"0",
-    hidratacion:"55", mmPct:"12", pesoPieza:"600",
+    hidratacion:"55", mmPct:"12", perdidaCoccion:"12",
+    vars:[{id:"rv5",nombre:"Pieza 600g",pesoG:"600",piezas:"4"}],
 
     extras:[
       {id:uid(),nombre:"Azúcar",cantG:"200"},
@@ -427,6 +473,8 @@ const S = {
 function EditorReceta({receta, onSave, onCancel}) {
   const [f, setF] = useState({...receta, unidadesSemana: receta.unidadesSemana||'0'});
   const [extras, setExtras] = useState(receta.extras.map(e=>({...e})));
+  const [varsEd, setVarsEd] = useState((receta.vars||[{id:uid(),nombre:"Pieza 900g",pesoG:"900",piezas:"0"}]).map(v=>({...v})));
+  const setVar = (idx,k,v) => setVarsEd(p=>p.map((x,i)=>i===idx?{...x,[k]:v}:x));
 
   const sf = (k,v) => setF(p=>({...p,[k]:v}));
   const setExtra = (idx,k,v) => setExtras(prev=>prev.map((e,i)=>i===idx?{...e,[k]:v}:e));
@@ -435,7 +483,7 @@ function EditorReceta({receta, onSave, onCancel}) {
 
   const cfg = TIPO_CONFIG[f.tipo];
 
-  const handleSave = () => onSave({...f, extras: extras.map(e=>({...e}))});
+  const handleSave = () => onSave({...f, extras: extras.map(e=>({...e})), vars: varsEd.map(v=>({...v}))});
 
   return <div style={S.cardHL}>
     <div style={{...S.sec,marginBottom:"0.8rem"}}>Editar receta de pan</div>
@@ -469,11 +517,32 @@ function EditorReceta({receta, onSave, onCancel}) {
         <input style={S.inp} type="text" inputMode="decimal" value={f.mmPct} onChange={e=>sf("mmPct",e.target.value)}/></div>
     </div>
 
-    <div style={{...S.sec,marginBottom:"0.6rem"}}>Rendimiento</div>
+    <div style={{...S.sec,marginBottom:"0.6rem"}}>Pérdida de cocción</div>
     <div style={S.row}>
-      <div style={S.col}><label style={S.lbl}>Peso por pieza cruda (g)</label>
-        <input style={S.inp} type="text" inputMode="decimal" value={f.pesoPieza} onChange={e=>sf("pesoPieza",e.target.value)}/></div>
+      <div style={S.col}><label style={S.lbl}>Pérdida cocción (%)</label>
+        <input style={S.inp} type="text" inputMode="decimal" value={f.perdidaCoccion||"13"}
+          onChange={e=>sf("perdidaCoccion",e.target.value)}/>
+        <div style={{fontSize:"0.68rem",color:C.textMuted,fontFamily:"Arial,sans-serif",marginTop:"0.2rem"}}>
+          Peso crudo = peso horneado ÷ (1 − {f.perdidaCoccion||13}%)
+        </div>
+      </div>
     </div>
+    <div style={{...S.sec,marginTop:"0.8rem",marginBottom:"0.6rem"}}>Variantes de peso</div>
+    <div style={S.tipI}>💡 Define los tamaños de pieza. Las piezas a producir se ajustan en Producción.</div>
+    {(varsEd).map((v,idx)=>(
+      <div key={v.id} style={{...S.cardHL,marginTop:"0.5rem",padding:"0.7rem"}}>
+        <div style={S.row}>
+          <div style={{...S.col,flex:2}}><label style={S.lbl}>Nombre variante</label>
+            <input style={S.inpSm} type="text" value={v.nombre} onChange={e=>setVar(idx,"nombre",e.target.value)}/></div>
+          <div style={S.col}><label style={S.lbl}>Peso/pieza (g)</label>
+            <input style={S.inpSm} type="text" inputMode="decimal" value={v.pesoG} onChange={e=>setVar(idx,"pesoG",e.target.value)}/></div>
+          <div style={{paddingTop:"1.2rem"}}>
+            <button style={{...S.btnSm,color:C.warning,borderColor:C.warning}} onClick={()=>setVarsEd(p=>p.filter((_,i)=>i!==idx))}>✕</button>
+          </div>
+        </div>
+      </div>
+    ))}
+    <button style={{...S.btn,marginTop:"0.4rem"}} onClick={()=>setVarsEd(p=>[...p,{id:uid(),nombre:"Nueva variante",pesoG:"500",piezas:"0"}])}>+ Variante</button>
 
 
 
@@ -512,20 +581,143 @@ function EditorReceta({receta, onSave, onCancel}) {
 }
 
 // ═══════════════════════════════════════════════════════
+// COMPONENTE: CALCULADORA
+// ═══════════════════════════════════════════════════════
+function Calculadora({receta, tAmb, setTAmb, tAgua, onSavePiezas}) {
+  const [piezas, setPiezas] = useState(() =>
+    Object.fromEntries((receta.vars||[]).map(v=>[v.id, String(toNum(v.piezas)||0)]))
+  );
+
+  // Reset when receta changes
+  useEffect(()=>{
+    setPiezas(Object.fromEntries((receta.vars||[]).map(v=>[v.id, String(toNum(v.piezas)||0)])));
+  }, [receta.id]);
+
+  const setPieza = (id, val) => {
+    const next = {...piezas, [id]: val};
+    setPiezas(next);
+    // Guardar en receta
+    onSavePiezas((receta.vars||[]).map(v=>({...v, piezas: next[v.id]||"0"})));
+  };
+
+  // Receta con piezas actuales para calcular
+  const recCalc = {...receta, vars: (receta.vars||[]).map(v=>({...v, piezas: piezas[v.id]||"0"}))};
+  const masa = calcMasa(recCalc);
+
+  return <>
+    {/* Piezas por variante */}
+    <div style={S.sec}>Piezas a producir por variante</div>
+    {(receta.vars||[]).map(v=>(
+      <div key={v.id} style={{...S.card,display:"flex",alignItems:"center",gap:"0.75rem",flexWrap:"wrap",padding:"0.7rem"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"0.88rem",fontWeight:"500",color:C.text}}>{v.nombre}</div>
+          <div style={{fontSize:"0.72rem",color:C.textMuted,fontFamily:"Arial,sans-serif"}}>{v.pesoG}g por pieza</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"0.4rem"}}>
+          <label style={{...S.lbl,marginBottom:0,fontSize:"0.65rem"}}>Piezas:</label>
+          <input
+            style={{width:"65px",background:C.bg,border:`2px solid ${C.accent}`,borderRadius:"4px",color:C.accentDark,padding:"0.38rem 0.45rem",fontSize:"1.1rem",fontFamily:"'Georgia',serif",textAlign:"center",outline:"none",fontWeight:"bold"}}
+            type="text" inputMode="numeric"
+            value={piezas[v.id]||"0"}
+            onChange={e=>setPieza(v.id, e.target.value)}
+          />
+        </div>
+        <div style={{fontSize:"0.75rem",color:C.textMuted,fontFamily:"Arial,sans-serif"}}>
+          {(()=>{
+            const perdida = toNum(receta.perdidaCoccion||13)/100;
+            const pesoCrudo = perdida<1 ? Math.round(toNum(v.pesoG)/(1-perdida)) : toNum(v.pesoG);
+            const p = toNum(piezas[v.id]||0);
+            return p>0 ? `${toNum(v.pesoG)}g horneado · ${pesoCrudo}g crudo · total ${(p*pesoCrudo).toLocaleString()}g` : `${toNum(v.pesoG)}g horneado → ${pesoCrudo}g crudo`;
+          })()}
+        </div>
+      </div>
+    ))}
+
+    {/* Resumen masa */}
+    {masa.masaTotalNecesaria > 0 && <>
+      <div style={S.sec}>Masa total necesaria</div>
+      <div style={{...S.card,display:"flex",gap:"0.6rem",flexWrap:"wrap"}}>
+        {[
+          ["Masa cruda total",`${masa.masaTotalNecesaria.toLocaleString()} g`],
+          [`Pérdida ${masa.perdidaPct}%`,`−${Math.round(masa.masaTotalNecesaria*masa.perdidaPct/100).toLocaleString()} g`],
+          ["Factor ×base",`×${toNum(masa.factor).toFixed(2)}`],
+        ].map(([l,v])=>(
+          <div key={l} style={{flex:1,minWidth:"100px",background:C.card,border:`1px solid ${C.borderLight}`,borderRadius:"5px",padding:"0.6rem",textAlign:"center"}}>
+            <div style={{fontSize:"0.6rem",color:C.textMuted,fontFamily:"Arial,sans-serif",textTransform:"uppercase",letterSpacing:"0.08em"}}>{l}</div>
+            <div style={{fontSize:"1rem",fontWeight:"bold",color:C.accentDark,fontFamily:"'Georgia',serif"}}>{v}</div>
+          </div>
+        ))}
+      </div>
+    </>}
+
+    {/* DDT */}
+    <div style={S.sec}>Temperatura del agua (DDT)</div>
+    <div style={S.card}>
+      <label style={S.lbl}>Temperatura ambiente (°C)</label>
+      <input style={S.inp} type="text" inputMode="numeric" value={tAmb} onChange={e=>setTAmb(e.target.value)}/>
+      <div style={{background:"#f0ede5",border:`1px solid ${C.border}`,borderRadius:"6px",padding:"0.85rem",marginTop:"0.6rem"}}>
+        <div style={{fontSize:"0.64rem",letterSpacing:"0.15em",textTransform:"uppercase",color:C.accent,fontFamily:"Arial,sans-serif",marginBottom:"0.35rem"}}>Temperatura del agua</div>
+        <div><span style={{fontSize:"1.85rem",fontWeight:"bold",color:C.accentDark,fontFamily:"'Georgia',serif"}}>{tAgua}</span>
+          <span style={{fontSize:"0.8rem",color:C.textMuted,fontFamily:"Arial,sans-serif",marginLeft:"0.3rem"}}>°C</span></div>
+        <div style={{fontSize:"0.68rem",color:C.textDim,fontFamily:"Arial,sans-serif",marginTop:"0.3rem"}}>(24×3)−{tAmb}−{tAmb}−3 = <strong>{tAgua}°C</strong> · DDT objetivo: 24°C</div>
+      </div>
+      {tAgua < 4 && <div style={S.tipV}>❄ Usar agua con hielo.</div>}
+    </div>
+
+    {/* Ingredientes escalados */}
+    {masa.masaTotalNecesaria > 0 && <>
+      <div style={S.sec}>Ingredientes necesarios</div>
+      <div style={S.card}>
+        <div style={S.ingGrid}>
+          {[
+            [masa.blanca>0?masa.blanca:null,`Harina blanca (${receta.pctBlanca}%)`],
+            [masa.integral>0?masa.integral:null,`Integral (${receta.pctIntegral}%)`],
+            [masa.agua,"Agua"],
+            [masa.mm,"Masa madre"],
+            [masa.sal,"Sal"],
+            ...masa.extras.map(e=>[e.cantGTotal,e.nombre]),
+          ].filter(([v])=>v!==null&&v>0).map(([v,nm])=>(
+            <div key={nm} style={S.ingCard}>
+              <span style={S.ingVal}>{v}</span>
+              <span style={S.ingUnit}>g</span>
+              <span style={S.ingName}>{nm}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:"0.9rem"}}>
+          <div style={{...S.sec,marginBottom:"0.4rem"}}>Porcentajes del panadero</div>
+          {[
+            ["Harina total","100%"],
+            ["Agua",`${receta.hidratacion}%`],
+            ["Masa madre",`${receta.mmPct}%`],
+            ["Sal","2%"],
+            ...receta.extras.map(e=>[e.nombre,`${((toNum(e.cantG)/toNum(receta.harinaKg)/10)||0).toFixed(1)}%`]),
+          ].map(([nm,v])=>(
+            <div key={nm} style={{display:"flex",justifyContent:"space-between",fontSize:"0.76rem",color:C.textMuted,fontFamily:"Arial,sans-serif",padding:"0.26rem 0",borderBottom:`1px solid ${C.borderLight}`}}>
+              <span>{nm}</span><span style={{color:C.accent,fontWeight:"bold"}}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>}
+  </>;
+}
+
+// ═══════════════════════════════════════════════════════
 // APP PRINCIPAL
 // ═══════════════════════════════════════════════════════
-export default function Planner() {
+export default function App() {
   const [tab, setTab] = useState("recetas");
   const [panTab, setPanTab] = useState("calc");
   const [loading, setLoading] = useState(true);
   const [recetas, setRecetas] = useState(RECETAS_INI);
   const [recetaActiva, setRecetaActiva] = useState("r1");
   const [editId, setEditId] = useState(null);
-  const [multStr, setMultStr] = useState("1");
   const [mmStart, setMmStart] = useState("06:00");
   const [amasadoStart, setAmasadoStart] = useState("08:00");
   const [tempFrio, setTempFrio] = useState("10");
   const [tAmb, setTAmb] = useState("30");
+
 
   useEffect(()=>{
     (async()=>{
@@ -536,10 +728,11 @@ export default function Planner() {
   },[]);
 
   useEffect(()=>{ if(!loading) storageSet(SK.recetas, recetas); },[recetas,loading]);
+  useEffect(()=>{ if(!loading) storageSet(SK.crono,{mmStart,amasadoStart,tempFrio,tAmb}); },
+    [mmStart,amasadoStart,tempFrio,tAmb,loading]);
 
   const receta = recetas.find(r=>r.id===recetaActiva) || recetas[0];
-  const mult = Math.max(0.5, toNum(multStr)||1);
-  const ing = useMemo(()=> receta ? calcIngredientes(receta, mult) : null, [receta, mult]);
+
   const tAgua = useMemo(()=> calcTAgua(toNum(tAmb)), [tAmb]);
   const tiempos = useMemo(()=> receta ? calcTiempos(receta.tipo, toNum(tempFrio)) : null, [receta, tempFrio]);
   const {steps, resumen} = useMemo(()=>
@@ -556,7 +749,8 @@ export default function Planner() {
   const newReceta = () => {
     const r = {id:uid(),nombre:"Nueva receta",tipo:"clasico",
       harinaKg:"3",pctBlanca:"100",pctIntegral:"0",
-      hidratacion:"75",mmPct:"25",pesoPieza:"900",
+      hidratacion:"75",mmPct:"25",perdidaCoccion:"13",
+      vars:[{id:uid(),nombre:"Pieza 900g",pesoG:"900",piezas:"0"}],
       extras:[],notas:""};
     setRecetas(prev=>[...prev,r]);
     setEditId(r.id);
@@ -575,8 +769,8 @@ export default function Planner() {
   return <div style={S.app}>
     <div style={S.header}>
       <div style={S.eyebrow}>Planificador de Producción · Panes de Masa Madre</div>
-      <h1 style={S.title}>Masa Madre Planner</h1>
-      <p style={S.subtitle}>Pan clásico · Pan dulce · Tradicional · Festivo · Guayaquil</p>
+      <h1 style={S.title}>Casa Ormaza Velásquez</h1>
+      <p style={S.subtitle}>Pan clásico · Pan dulce · Tradicional · Festivo · Ecuador</p>
     </div>
 
     <div style={S.main}>
@@ -636,73 +830,7 @@ export default function Planner() {
         </div>
 
         {/* CALCULADORA */}
-        {panTab==="calc" && <>
-          <div style={S.sec}>Multiplicador de receta</div>
-          <div style={{...S.card,display:"flex",alignItems:"center",gap:"1rem",flexWrap:"wrap"}}>
-            <div>
-              <label style={S.lbl}>Multiplicador</label>
-              <input style={{width:"70px",background:C.bg,border:`1px solid ${C.accent}`,borderRadius:"4px",color:C.accentDark,padding:"0.45rem 0.6rem",fontSize:"1.2rem",fontFamily:"'Georgia',serif",textAlign:"center",outline:"none",fontWeight:"bold"}}
-                type="text" inputMode="decimal" value={multStr}
-                onChange={e=>setMultStr(e.target.value)}
-                onBlur={e=>setMultStr(String(Math.max(0.5,toNum(e.target.value)||1)))}/>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:"0.76rem",color:C.textMuted,fontFamily:"Arial,sans-serif",marginBottom:"0.2rem"}}>
-                × {mult} receta{mult!==1?"s":""} → <strong style={{color:C.accentDark}}>{ing.piezas} piezas</strong> de {receta.pesoPieza}g
-              </div>
-              {ing.sobrante > 0 && <div style={{fontSize:"0.73rem",color:C.textMuted,fontFamily:"Arial,sans-serif"}}>Sobrante: {ing.sobrante}g</div>}
-              <div style={{fontSize:"0.73rem",color:C.textMuted,fontFamily:"Arial,sans-serif"}}>Peso horneado estimado: {(ing.pesoHorneado/1000).toFixed(2)} kg</div>
-            </div>
-          </div>
-
-          <div style={S.sec}>Temperatura del agua (DDT)</div>
-          <div style={S.card}>
-            <label style={S.lbl}>Temperatura ambiente (°C)</label>
-            <input style={S.inp} type="text" inputMode="numeric" value={tAmb}
-              onChange={e=>setTAmb(e.target.value)}/>
-            <div style={{background:"#f0ede5",border:`1px solid ${C.border}`,borderRadius:"6px",padding:"0.85rem",marginTop:"0.6rem"}}>
-              <div style={{fontSize:"0.64rem",letterSpacing:"0.15em",textTransform:"uppercase",color:C.accent,fontFamily:"Arial,sans-serif",marginBottom:"0.35rem"}}>Temperatura del agua</div>
-              <div><span style={{fontSize:"1.85rem",fontWeight:"bold",color:C.accentDark,fontFamily:"'Georgia',serif"}}>{tAgua}</span>
-                <span style={{fontSize:"0.8rem",color:C.textMuted,fontFamily:"Arial,sans-serif",marginLeft:"0.3rem"}}>°C</span></div>
-              <div style={{fontSize:"0.68rem",color:C.textDim,fontFamily:"Arial,sans-serif",marginTop:"0.3rem"}}>(24×3)−{tAmb}−{tAmb}−3 = <strong>{tAgua}°C</strong> · DDT objetivo: 24°C</div>
-            </div>
-            {tAgua < 4 && <div style={S.tipV}>❄ Usar agua con hielo.</div>}
-          </div>
-
-          <div style={S.sec}>Ingredientes calculados</div>
-          <div style={S.card}>
-            <div style={S.ingGrid}>
-              {[
-                [ing.blanca > 0 ? ing.blanca : null, `Harina blanca (${receta.pctBlanca}%)`],
-                [ing.integral > 0 ? ing.integral : null, `Integral (${receta.pctIntegral}%)`],
-                [ing.agua, "Agua"],
-                [ing.mm, "Masa madre"],
-                [ing.sal, "Sal"],
-                ...ing.extras.map(e=>[e.cantGTotal, e.nombre]),
-              ].filter(([v])=>v!==null&&v>0).map(([v,n])=>(
-                <div key={n} style={S.ingCard}>
-                  <span style={S.ingVal}>{v}</span>
-                  <span style={S.ingUnit}>g</span>
-                  <span style={S.ingName}>{n}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{marginTop:"0.9rem"}}>
-              <div style={{...S.sec,marginBottom:"0.4rem"}}>Porcentajes del panadero</div>
-              {[
-                ["Harina total","100%"],
-                ["Agua",`${receta.hidratacion}%`],
-                ["Masa madre",`${receta.mmPct}%`],
-                ["Sal","2%"],
-                ...receta.extras.map(e=>[e.nombre,`${((toNum(e.cantG)/toNum(receta.harinaKg)/10)||0).toFixed(1)}%`]),
-              ].map(([n,v])=>(
-                <div key={n} style={{display:"flex",justifyContent:"space-between",fontSize:"0.76rem",color:C.textMuted,fontFamily:"Arial,sans-serif",padding:"0.26rem 0",borderBottom:`1px solid ${C.borderLight}`}}>
-                  <span>{n}</span><span style={{color:C.accent,fontWeight:"bold"}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>}
+        {panTab==="calc" && <Calculadora receta={receta} tAmb={tAmb} setTAmb={setTAmb} tAgua={tAgua} onSavePiezas={(vars)=>setRecetas(prev=>prev.map(r=>r.id!==recetaActiva?r:{...r,vars}))}/>}
 
         {/* CRONOGRAMA */}
         {panTab==="cronograma" && <>
@@ -710,7 +838,7 @@ export default function Planner() {
           <div style={S.card}>
             <div style={S.row}>
               <div style={S.col}><label style={S.lbl}>Temp. frigorífico (°C)</label>
-                <input style={S.inp} type="text" inputMode="numeric" value={tempFrio} onChange={e=>setTempFrio(e.target.value)}/></div>
+                <input style={S.inp} type="text" inputMode="numeric" value={tempFrio} onChange={e=>{setTempFrio(e.target.value);}}/></div>
               <div style={S.col}><label style={S.lbl}>Refresco MM (Día 1)</label>
                 <input style={S.inp} type="time" value={mmStart} onChange={e=>setMmStart(e.target.value)}/></div>
               <div style={S.col}><label style={S.lbl}>Inicio amasado</label>
@@ -792,3 +920,4 @@ export default function Planner() {
     </div>
   </div>;
 }
+
