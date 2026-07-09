@@ -1,878 +1,684 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 
-async function storageGet(key) {
-  try {
-    const r = await window.storage.get(key, true);
-    return r ? JSON.parse(r.value) : null;
-  } catch {
-    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
-    catch { return null; }
-  }
+// ── Storage ──
+async function sGet(key) {
+  try { const r = await window.storage.get(key,true); return r ? JSON.parse(r.value) : null; }
+  catch { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; } }
 }
-async function storageSet(key, value) {
-  try {
-    await window.storage.set(key, JSON.stringify(value), true);
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    try { localStorage.setItem(key, JSON.stringify(value)); }
-    catch(e) { console.error(e); }
-  }
+async function sSet(key, val) {
+  try { await window.storage.set(key, JSON.stringify(val), true); localStorage.setItem(key, JSON.stringify(val)); }
+  catch { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.error(e); } }
 }
-const SK = {
-  ing:  "rc-v1-ingredientes", emp:  "rc-v1-empaques", rec:  "rc-v1-recetas", cf:   "rc-v1-costos-fijos",
-};
+const SK = { ing:"rc2-ing", emp:"rc2-emp", rec:"rc2-rec", cf:"rc2-cf" };
 
-function uid() { return "x" + Math.random().toString(36).slice(2,9); }
-function toN(v) { return parseFloat(String(v ?? 0).replace(",",".")) || 0; }
-const fmt  = n => `$${toN(n).toFixed(2)}`;
-const fmtP = n => `${toN(n).toFixed(1)}%`;
+// ── Utilidades ──
+function uid() { return "x"+Math.random().toString(36).slice(2,9); }
+function n(v) { return parseFloat(String(v??0).replace(",",".")) || 0; }
+const $  = v => `$${n(v).toFixed(2)}`;
+const P  = v => `${n(v).toFixed(1)}%`;
 
-const UNIDADES = ["kg","g","litro","ml","unidad","docena","lb","oz"];
-const CATS = ["confiteria","conserveria","panaderia","otro"];
-const CAT_LABEL = { confiteria:"Confitería", conserveria:"Conservería", panaderia:"Panadería", otro:"Otro" };
-
-const ING_INI = [
-  { id:"i1", nombre:"Azúcar", unidad:"kg", costo:"0.90"  }, { id:"i2", nombre:"Mantequilla", unidad:"kg", costo:"4.50"  }, { id:"i3", nombre:"Huevos", unidad:"unidad", costo:"0.18"  }, { id:"i4", nombre:"Chocolate negro", unidad:"kg", costo:"8.00"  }, { id:"i5", nombre:"Almendras", unidad:"kg", costo:"12.00" }, { id:"i6", nombre:"Maní", unidad:"kg", costo:"2.50"  }, { id:"i7", nombre:"Miel", unidad:"kg", costo:"6.00"  }, { id:"i8", nombre:"Fruta para mermelada", unidad:"kg", costo:"1.50"  }, { id:"i9", nombre:"Almidón de yuca", unidad:"kg", costo:"1.20"  }, { id:"i10", nombre:"Sal", unidad:"kg", costo:"0.33"  }, { id:"i11", nombre:"Vainilla", unidad:"ml", costo:"0.05"  }, { id:"i12", nombre:"Agua", unidad:"litro", costo:"0.001" }, { id:"i13", nombre:"Pan masa madre (pieza)",unidad:"unidad", costo:"3.00"  },
+// ── Datos iniciales ──
+const ING0 = [
+  {id:"i1", nombre:"Azúcar",              unidad:"kg",     precio:"0.90"},
+  {id:"i2", nombre:"Mantequilla",          unidad:"kg",     precio:"4.50"},
+  {id:"i3", nombre:"Huevos",               unidad:"unidad", precio:"0.18"},
+  {id:"i4", nombre:"Chocolate negro",      unidad:"kg",     precio:"8.00"},
+  {id:"i5", nombre:"Almendras",            unidad:"kg",     precio:"12.00"},
+  {id:"i6", nombre:"Maní",                 unidad:"kg",     precio:"2.50"},
+  {id:"i7", nombre:"Miel",                 unidad:"kg",     precio:"6.00"},
+  {id:"i8", nombre:"Fruta para mermelada", unidad:"kg",     precio:"1.50"},
+  {id:"i9", nombre:"Almidón de yuca",      unidad:"kg",     precio:"1.20"},
+  {id:"i10",nombre:"Sal",                  unidad:"kg",     precio:"0.33"},
+  {id:"i11",nombre:"Vainilla",             unidad:"ml",     precio:"0.05"},
+  {id:"i12",nombre:"Pan masa madre (u)",   unidad:"unidad", precio:"3.00"},
 ];
 
-const EMP_INI = [
-  { id:"e1", nombre:"Bolsa pequeña (≤200g)", costo:"0.08" }, { id:"e2", nombre:"Bolsa mediana (200–500g)",costo:"0.12" }, { id:"e3", nombre:"Bolsa grande (500g–1kg)", costo:"0.18" }, { id:"e4", nombre:"Bolsa extra (>1kg)", costo:"0.25" }, { id:"e5", nombre:"Frasco 250ml", costo:"0.65" }, { id:"e6", nombre:"Frasco 500ml", costo:"0.85" }, { id:"e7", nombre:"Frasco 1L", costo:"1.20" }, { id:"e8", nombre:"Sin empaque", costo:"0.00" },
+const EMP0 = [
+  {id:"e1",nombre:"Bolsa pequeña ≤200g",  precio:"0.08"},
+  {id:"e2",nombre:"Bolsa mediana 200-500g",precio:"0.12"},
+  {id:"e3",nombre:"Bolsa grande 500g-1kg", precio:"0.18"},
+  {id:"e4",nombre:"Bolsa extra >1kg",      precio:"0.25"},
+  {id:"e5",nombre:"Frasco 250ml",          precio:"0.65"},
+  {id:"e6",nombre:"Frasco 500ml",          precio:"0.85"},
+  {id:"e7",nombre:"Frasco 1L",             precio:"1.20"},
+  {id:"e8",nombre:"Sin empaque",           precio:"0.00"},
 ];
 
-const REC_INI = [
-  { id:"r1", nombre:"Galletas de almidón", categoria:"confiteria", perdida:"10",
-    ingredientes:[{id:"a1",ingId:"i9",cant:"1"},{id:"a2",ingId:"i1",cant:"0.3"},{id:"a3",ingId:"i2",cant:"0.2"},{id:"a4",ingId:"i3",cant:"4"}],
-    energia:"0.20", otrosCostos:"0",
-    operarios:[{id:"b1",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
-    variantes:[{id:"c1",nombre:"Paquete 140g",pesoG:"140",empaqueId:"e2",precioVenta:"4.00",unidadesSemana:"30"}], notas:"" },
-  { id:"r2", nombre:"Galletas de chocolate negro", categoria:"confiteria", perdida:"10",
-    ingredientes:[{id:"a5",ingId:"i4",cant:"0.5"},{id:"a6",ingId:"i1",cant:"0.2"},{id:"a7",ingId:"i2",cant:"0.15"},{id:"a8",ingId:"i3",cant:"2"}],
-    energia:"0.20", otrosCostos:"0",
-    operarios:[{id:"b2",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
-    variantes:[{id:"c2",nombre:"Paquete 140g",pesoG:"140",empaqueId:"e2",precioVenta:"4.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r3", nombre:"Forgotten cookies", categoria:"confiteria", perdida:"5",
-    ingredientes:[{id:"a9",ingId:"i3",cant:"4"},{id:"a10",ingId:"i1",cant:"0.25"},{id:"a11",ingId:"i4",cant:"0.2"}],
-    energia:"0.15", otrosCostos:"0",
-    operarios:[{id:"b3",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
-    variantes:[{id:"c3",nombre:"Paquete 140g",pesoG:"140",empaqueId:"e1",precioVenta:"4.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r4", nombre:"Almendras caramelizadas", categoria:"confiteria", perdida:"5",
-    ingredientes:[{id:"a12",ingId:"i5",cant:"0.5"},{id:"a13",ingId:"i1",cant:"0.15"}],
-    energia:"0.15", otrosCostos:"0",
-    operarios:[{id:"b4",nombre:"Operario 1",horas:"1",tarifa:"3.01"}],
-    variantes:[{id:"c4",nombre:"Paquete 100g",pesoG:"100",empaqueId:"e2",precioVenta:"5.00",unidadesSemana:"0"},{id:"c5",nombre:"Paquete 200g",pesoG:"200",empaqueId:"e3",precioVenta:"9.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r5", nombre:"Mermelada", categoria:"conserveria", perdida:"20",
-    ingredientes:[{id:"a14",ingId:"i8",cant:"2"},{id:"a15",ingId:"i1",cant:"0.8"}],
-    energia:"0.30", otrosCostos:"0",
-    operarios:[{id:"b5",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
-    variantes:[{id:"c6",nombre:"Frasco 250ml",pesoG:"250",empaqueId:"e5",precioVenta:"6.00",unidadesSemana:"0"},{id:"c7",nombre:"Frasco 500ml",pesoG:"500",empaqueId:"e6",precioVenta:"10.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r6", nombre:"Peanut butter", categoria:"conserveria", perdida:"5",
-    ingredientes:[{id:"a16",ingId:"i6",cant:"1.5"},{id:"a17",ingId:"i10",cant:"0.01"}],
-    energia:"0.20", otrosCostos:"0",
-    operarios:[{id:"b6",nombre:"Operario 1",horas:"1",tarifa:"3.01"}],
-    variantes:[{id:"c8",nombre:"Frasco 250ml",pesoG:"250",empaqueId:"e5",precioVenta:"7.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r7", nombre:"Honey", categoria:"conserveria", perdida:"0",
-    ingredientes:[{id:"a18",ingId:"i7",cant:"1"}],
-    energia:"0.05", otrosCostos:"0",
-    operarios:[{id:"b7",nombre:"Operario 1",horas:"0.5",tarifa:"3.01"}],
-    variantes:[{id:"c9",nombre:"Frasco 250ml",pesoG:"250",empaqueId:"e5",precioVenta:"8.00",unidadesSemana:"0"}], notas:"" },
-  { id:"r8", nombre:"Pan masa madre", categoria:"panaderia", perdida:"0",
-    ingredientes:[{id:"a19",ingId:"i13",cant:"1"}],
-    energia:"0", otrosCostos:"0", operarios:[],
-    variantes:[{id:"c10",nombre:"Pieza 1kg",pesoG:"1000",empaqueId:"e4",precioVenta:"7.00",unidadesSemana:"30"}],
-    notas:"Costo por pieza introducido manualmente desde el planner." },
+// Receta: ingredientes en su unidad natural (kg, unidad, ml…)
+// Variante: pesoG (gramos por pieza), piezas (a producir), precioVenta, empaqueId, udsSemana
+const REC0 = [
+  { id:"r1", nombre:"Galletas de almidón", cat:"confiteria", perdida:"10",
+    energia:"0.20", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i9",cant:"1"},{id:"a2",ingId:"i1",cant:"0.3"},{id:"a3",ingId:"i2",cant:"0.2"},{id:"a4",ingId:"i3",cant:"4"}],
+    vars:[
+      {id:"v1",nombre:"Paquete 140g", pesoG:"140",piezas:"20",precioVenta:"4.00",empaqueId:"e2",udsSemana:"30"},
+      {id:"v2",nombre:"Paquete 280g", pesoG:"280",piezas:"5", precioVenta:"7.00",empaqueId:"e3",udsSemana:"0"},
+    ], notas:"" },
+  { id:"r2", nombre:"Galletas chocolate negro", cat:"confiteria", perdida:"10",
+    energia:"0.20", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i4",cant:"0.5"},{id:"a2",ingId:"i1",cant:"0.2"},{id:"a3",ingId:"i2",cant:"0.15"},{id:"a4",ingId:"i3",cant:"2"}],
+    vars:[{id:"v1",nombre:"Paquete 140g",pesoG:"140",piezas:"10",precioVenta:"4.00",empaqueId:"e2",udsSemana:"0"}], notas:"" },
+  { id:"r3", nombre:"Forgotten cookies", cat:"confiteria", perdida:"5",
+    energia:"0.15", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i3",cant:"4"},{id:"a2",ingId:"i1",cant:"0.25"},{id:"a3",ingId:"i4",cant:"0.2"}],
+    vars:[{id:"v1",nombre:"Paquete 140g",pesoG:"140",piezas:"10",precioVenta:"4.00",empaqueId:"e1",udsSemana:"0"}], notas:"" },
+  { id:"r4", nombre:"Almendras caramelizadas", cat:"confiteria", perdida:"5",
+    energia:"0.15", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"1",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i5",cant:"0.5"},{id:"a2",ingId:"i1",cant:"0.15"}],
+    vars:[
+      {id:"v1",nombre:"Paquete 100g",pesoG:"100",piezas:"10",precioVenta:"5.00",empaqueId:"e2",udsSemana:"0"},
+      {id:"v2",nombre:"Paquete 200g",pesoG:"200",piezas:"5", precioVenta:"9.00",empaqueId:"e3",udsSemana:"0"},
+    ], notas:"" },
+  { id:"r5", nombre:"Mermelada", cat:"conserveria", perdida:"20",
+    energia:"0.30", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i8",cant:"2"},{id:"a2",ingId:"i1",cant:"0.8"}],
+    vars:[
+      {id:"v1",nombre:"Frasco 250ml",pesoG:"250",piezas:"8",precioVenta:"6.00", empaqueId:"e5",udsSemana:"0"},
+      {id:"v2",nombre:"Frasco 500ml",pesoG:"500",piezas:"4",precioVenta:"10.00",empaqueId:"e6",udsSemana:"0"},
+    ], notas:"" },
+  { id:"r6", nombre:"Peanut butter", cat:"conserveria", perdida:"5",
+    energia:"0.20", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"1",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i6",cant:"1.5"},{id:"a2",ingId:"i10",cant:"0.01"}],
+    vars:[
+      {id:"v1",nombre:"Frasco 250ml",pesoG:"250",piezas:"5",precioVenta:"7.00", empaqueId:"e5",udsSemana:"0"},
+      {id:"v2",nombre:"Frasco 500ml",pesoG:"500",piezas:"2",precioVenta:"12.00",empaqueId:"e6",udsSemana:"0"},
+    ], notas:"" },
+  { id:"r7", nombre:"Honey", cat:"conserveria", perdida:"0",
+    energia:"0.05", otros:"0",
+    ops:[{id:"o1",nombre:"Operario 1",horas:"0.5",tarifa:"3.01"}],
+    ings:[{id:"a1",ingId:"i7",cant:"1"}],
+    vars:[{id:"v1",nombre:"Frasco 250ml",pesoG:"250",piezas:"4",precioVenta:"8.00",empaqueId:"e5",udsSemana:"0"}], notas:"" },
+  { id:"r8", nombre:"Pan masa madre", cat:"panaderia", perdida:"0",
+    energia:"0", otros:"0", ops:[],
+    ings:[{id:"a1",ingId:"i12",cant:"1"}],
+    vars:[{id:"v1",nombre:"Pieza 1kg",pesoG:"1000",piezas:"30",precioVenta:"7.00",empaqueId:"e4",udsSemana:"30"}],
+    notas:"Costo por pieza desde el planner." },
 ];
 
-const CF_INI = {
-  sueldo:"600", items:[
-    {id:uid(),nombre:"Hogar / negocio",monto:"100"}, {id:uid(),nombre:"Internet",monto:"30"}, ],
-};
+const CF0 = { sueldo:"600", items:[{id:"x1",nombre:"Hogar/negocio",monto:"100"},{id:"x2",nombre:"Internet",monto:"30"}] };
 
-// Costo de ingredientes de una receta (1 batch, sin multiplicador)
-function calcIngCost(rec, ings) {
-  return rec.ingredientes.map(li => {
-    const ing = ings.find(i => i.id === li.ingId);
-    if (!ing) return { nombre:"?", cant:toN(li.cant), unidad:"?", costoUnit:0, costoTotal:0 };
-    const cant = toN(li.cant);
-    // Costo: cantidad × precio por unidad (misma unidad)
-    const costoTotal = cant * toN(ing.costo);
-    return { nombre:ing.nombre, cant, unidad:ing.unidad, costoUnit:toN(ing.costo), costoTotal };
+// ── CÁLCULO PRINCIPAL ──
+function calcular(rec, ings, piezasMap) {
+  // piezasMap: { varId: número } — cuántas piezas de cada variante
+  const perdida = n(rec.perdida) / 100;
+
+  // 1. Por variante: peso crudo = peso horneado / (1 - perdida)
+  // El usuario introduce el peso que quiere horneado
+  const varsConG = (rec.vars||[]).map(v => {
+    const piezasN = n(piezasMap[v.id] ?? v.piezas);
+    const pesoHorneadoG = n(v.pesoG);
+    const pesoCrudoG = perdida < 1 ? Math.round(pesoHorneadoG / (1 - perdida)) : pesoHorneadoG;
+    const gramosNetos = piezasN * pesoHorneadoG;   // gramos horneados totales
+    const gramosCrudos = piezasN * pesoCrudoG;      // masa cruda necesaria
+    return { ...v, piezasN, pesoHorneadoG, pesoCrudoG, gramosNetos, gramosCrudos };
   });
-}
 
-// Peso bruto total del batch en gramos
-function calcPesoBruto(rec, ings) {
-  return rec.ingredientes.reduce((acc, li) => {
+  const totalNeto = varsConG.reduce((a,v) => a + v.gramosNetos, 0);
+
+  // 2. Masa bruta (cruda) total necesaria = suma de gramos crudos por variante
+  const totalBruto = varsConG.reduce((a,v) => a + v.gramosCrudos, 0);
+
+  // 3. Peso bruto de la receta base (ingredientes en unidades de peso)
+  const pesoBrutoBase = (rec.ings||[]).reduce((acc, li) => {
     const ing = ings.find(i => i.id === li.ingId);
     if (!ing) return acc;
-    const cant = toN(li.cant);
+    const cant = n(li.cant);
     if (ing.unidad === "kg")    return acc + cant * 1000;
     if (ing.unidad === "g")     return acc + cant;
     if (ing.unidad === "litro") return acc + cant * 1000;
     if (ing.unidad === "ml")    return acc + cant;
-    return acc; // unidades (huevos etc) no suman peso
+    return acc; // unidades (huevos, piezas) no suman peso
   }, 0);
-}
 
-// Cálculo completo de una receta con multiplicador
-function calcReceta(rec, ings, emps, mult = 1) {
-  const m = Math.max(0.1, toN(mult));
-  const lineasIng = calcIngCost(rec, ings);
-  const costoIngUnit = lineasIng.reduce((a, l) => a + l.costoTotal, 0); // 1 batch
-  const costoIngTotal = costoIngUnit * m;
+  // 4. Factor de escala
+  const factor = pesoBrutoBase > 0 ? totalBruto / pesoBrutoBase : 0;
 
-  const pesoBrutoUnit = calcPesoBruto(rec, ings); // gramos, 1 batch
-  const perdida = toN(rec.perdida) / 100;
-  const pesoNetoUnit = Math.round(pesoBrutoUnit * (1 - perdida));
-  const pesoBrutoTotal = Math.round(pesoBrutoUnit * m);
-  const pesoNetoTotal = Math.round(pesoNetoUnit * m);
-
-  const costoEnergiaUnit = toN(rec.energia);
-  const costoEnergiaTotal = costoEnergiaUnit * m;
-
-  const costoOtrosUnit = toN(rec.otrosCostos);
-  const costoOtrosTotal = costoOtrosUnit * m;
-
-  const costoMOUnit = (rec.operarios || []).reduce((a, op) =>
-    a + toN(op.horas) * toN(op.tarifa), 0);
-  const costoMOTotal = costoMOUnit * m;
-
-  // Variantes: piezas, costo por pieza, ganancia
-  const variantes = (rec.variantes || []).map(v => {
-    const emp = emps.find(e => e.id === v.empaqueId) || { costo:"0", nombre:"Sin empaque" };
-    const pesoG = toN(v.pesoG);
-    const piezasUnit = pesoG > 0 ? Math.floor(pesoNetoUnit / pesoG) : 0;
-    const piezasTotal = piezasUnit * m;
-    const costoEmpUnit = toN(emp.costo) * piezasUnit;
-    const costoEmpTotal = costoEmpUnit * m;
-    const costoTotalBatch = costoIngTotal + costoEnergiaTotal + costoOtrosTotal + costoMOTotal + costoEmpTotal;
-    const costoPorPieza = piezasTotal > 0 ? costoTotalBatch / piezasTotal : 0;
-    const pvp = toN(v.precioVenta);
-    const gananciaPorPieza = pvp - costoPorPieza;
-    const gananciaTotal = gananciaPorPieza * piezasTotal;
-    const ingresoTotal = pvp * piezasTotal;
-    const margen = pvp > 0 ? (gananciaPorPieza / pvp) * 100 : 0;
-    return {
-      ...v, emp, pesoG, piezasUnit, piezasTotal, costoEmpUnit, costoEmpTotal, costoPorPieza, pvp, gananciaPorPieza, gananciaTotal, ingresoTotal, margen, };
+  // 5. Ingredientes escalados y su costo
+  const lineasIng = (rec.ings||[]).map(li => {
+    const ing = ings.find(i => i.id === li.ingId) || {nombre:"?",unidad:"?",precio:"0"};
+    const cantBase = n(li.cant);
+    const cantTotal = cantBase * factor;
+    const costo = cantTotal * n(ing.precio);
+    return { nombre: ing.nombre, unidad: ing.unidad, cantBase, cantTotal, precio: n(ing.precio), costo };
   });
 
+  const costoIng = lineasIng.reduce((a,l) => a + l.costo, 0);
+  const costoEnergia = n(rec.energia) * factor;
+  const costoOtros = n(rec.otros) * factor;
+  const costoMO = (rec.ops||[]).reduce((a,op) => a + n(op.horas)*n(op.tarifa), 0) * factor;
+  const costoProduccion = costoIng + costoEnergia + costoOtros + costoMO;
+
+  // 6. Costo por gramo neto
+  const costoPorGramo = totalNeto > 0 ? costoProduccion / totalNeto : 0;
+
+  // 7. Por variante: costo, ganancia, margen
+  const variantes = varsConG.map(v => {
+    const emp = EMP0.find(e => e.id === v.empaqueId) || {nombre:"Sin empaque",precio:"0"};
+    const costoEmp = n(emp.precio);
+    const costoProducPieza = n(v.pesoG) * costoPorGramo;
+    const costoPieza = costoProducPieza + costoEmp;
+    const pvp = n(v.precioVenta);
+    const ganPieza = pvp - costoPieza;
+    const ganTotal = ganPieza * v.piezasN;
+    const ingreso = pvp * v.piezasN;
+    const margen = pvp > 0 ? (ganPieza / pvp) * 100 : 0;
+    return { ...v, emp, costoEmp, costoProducPieza, costoPieza, pvp, ganPieza, ganTotal, ingreso, margen };
+  });
+
+  const costoEmpTotal = variantes.reduce((a,v) => a + v.costoEmp * v.piezasN, 0);
+  const costoTotal = costoProduccion + costoEmpTotal;
+  const ingresoTotal = variantes.reduce((a,v) => a + v.ingreso, 0);
+  const ganTotal = ingresoTotal - costoTotal;
+
   return {
-    lineasIng, costoIngUnit, costoIngTotal, pesoBrutoUnit, pesoNetoUnit, pesoBrutoTotal, pesoNetoTotal, costoEnergiaUnit, costoEnergiaTotal, costoOtrosUnit, costoOtrosTotal, costoMOUnit, costoMOTotal, variantes, mult: m, };
+    factor, totalNeto: Math.round(totalNeto), totalBruto: Math.round(totalBruto),
+    lineasIng, costoIng, costoEnergia, costoOtros, costoMO, costoProduccion,
+    costoEmpTotal, costoTotal, ingresoTotal, ganTotal, variantes,
+  };
 }
 
-// Finanzas globales
-function calcFinanzas(recetas, ings, emps, cf) {
-  const totalFijos = toN(cf.sueldo) + (cf.items||[]).reduce((a,i)=>a+toN(i.monto),0);
+// ── Colores ──
+const A="#8b5e2a", AD="#6b4520", G="#9a7020";
+const BG="#f5f0e8", SU="#fff", CA="#faf7f2";
+const BO="#ddd5c0", BL="#ede5d0";
+const TX="#2a1f0e", TM="#6b5a40", TD="#9a8a70";
+const OK="#2a5a2a", OB="#e8f5e8";
+const WA="#8a4010", WB="#fff3e8";
+const IN="#2a5a78", IB="#e8f2f8";
+const f="Arial", g="Georgia";
 
-  const lineas = recetas.flatMap(rec =>
-    (rec.variantes||[])
-      .filter(v => toN(v.unidadesSemana) > 0)
-      .map(v => {
-        const d = calcReceta(rec, ings, emps, 1);
-        const dv = d.variantes.find(x => x.id === v.id);
-        if (!dv) return null;
-        const udsMes = toN(v.unidadesSemana) * 4;
-        // Batchs necesarios para producir esas unidades
-        const batchs = dv.piezasUnit > 0 ? Math.ceil(udsMes / dv.piezasUnit) : 0;
-        const dBatch = calcReceta(rec, ings, emps, batchs);
-        const dvBatch = dBatch.variantes.find(x => x.id === v.id);
-        const ingreso = udsMes * toN(v.precioVenta);
-        const costoVar = dvBatch ? dvBatch.costoPorPieza * udsMes : 0;
-        const ganBruta = ingreso - costoVar;
-        const margen = ingreso > 0 ? (ganBruta/ingreso)*100 : 0;
-        return { rec, v, udsMes, batchs, ingreso, costoVar, ganBruta, margen, dv };
-      })
-      .filter(Boolean)
+function catColor(cat) {
+  if(cat==="confiteria")  return {c:"#5a7a2a",bg:"#edf5e0"};
+  if(cat==="conserveria") return {c:"#2a5a7a",bg:"#e0edf5"};
+  if(cat==="panaderia")   return {c:A,bg:"#f5ede0"};
+  return {c:"#555",bg:"#f0f0f0"};
+}
+const CAT = {confiteria:"Confitería",conserveria:"Conservería",panaderia:"Panadería",otro:"Otro"};
+const CATS = Object.keys(CAT);
+const UNIDS = ["kg","g","litro","ml","unidad","docena","lb","oz"];
+
+// ── Estilos base ──
+const inp = {width:"100%",background:BG,border:`1px solid ${BO}`,borderRadius:4,color:TX,padding:".45rem .6rem",fontSize:".9rem",fontFamily:g,boxSizing:"border-box",outline:"none"};
+const inpSm = {...inp,fontSize:".82rem",fontFamily:f,padding:".35rem .45rem"};
+const sel = {...inp,fontSize:".82rem",fontFamily:f,padding:".38rem .45rem"};
+const lbl = {display:"block",fontSize:".62rem",letterSpacing:".1em",textTransform:"uppercase",color:TM,fontFamily:f,marginBottom:".22rem"};
+const card = {background:SU,border:`1px solid ${BO}`,borderRadius:6,padding:".9rem",marginBottom:".7rem",boxShadow:"0 1px 3px rgba(0,0,0,.05)"};
+const cardHL = {...card,border:`2px solid ${A}`};
+const sec = {fontSize:".6rem",letterSpacing:".2em",textTransform:"uppercase",color:A,fontFamily:f,marginBottom:".65rem",paddingBottom:".28rem",borderBottom:`1px solid ${BO}`};
+const row = {display:"flex",gap:".55rem",flexWrap:"wrap",marginBottom:".55rem"};
+const col = {flex:1,minWidth:"100px"};
+const btn = {padding:".45rem .85rem",fontSize:".73rem",fontFamily:f,cursor:"pointer",border:`1px solid ${BO}`,borderRadius:4,background:SU,color:TM,display:"inline-flex",alignItems:"center",gap:".3rem"};
+const btnP = {...btn,background:A,border:`1px solid ${AD}`,color:"#fff"};
+const btnD = {...btn,background:WB,border:`1px solid ${WA}`,color:WA};
+const btnSm = {padding:".25rem .5rem",fontSize:".68rem",fontFamily:f,cursor:"pointer",border:`1px solid ${BO}`,borderRadius:3,background:SU,color:TM};
+const bar = {background:CA,border:`1px solid ${BL}`,borderRadius:4,padding:".45rem .75rem",marginTop:".35rem",display:"flex",justifyContent:"space-between",alignItems:"center"};
+const barHL = {...bar,background:"#f0ede5",border:`1px solid ${A}`};
+const tipV = {background:OB,border:`1px solid ${OK}44`,borderRadius:4,padding:".5rem .75rem",fontSize:".72rem",color:OK,fontFamily:f,lineHeight:1.5,marginTop:".45rem"};
+const tipW = {background:WB,border:`1px solid ${WA}`,borderRadius:4,padding:".5rem .75rem",fontSize:".72rem",color:WA,fontFamily:f,lineHeight:1.5,marginTop:".45rem"};
+const tipI = {background:IB,border:`1px solid ${IN}44`,borderRadius:4,padding:".5rem .75rem",fontSize:".72rem",color:IN,fontFamily:f,lineHeight:1.5,marginTop:".45rem"};
+const tbl = {width:"100%",borderCollapse:"collapse",fontSize:".8rem",fontFamily:f};
+const th = {textAlign:"left",fontSize:".58rem",letterSpacing:".1em",textTransform:"uppercase",color:TM,padding:".28rem .45rem",borderBottom:`2px solid ${BO}`,fontFamily:f};
+const thR = {...th,textAlign:"right"};
+const td = {padding:".35rem .45rem",borderBottom:`1px solid ${BL}`,color:TX,verticalAlign:"middle"};
+const tdM = {...td,color:TM};
+const tdR = {...td,textAlign:"right",color:TM};
+const kpiG = {display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:".5rem",marginBottom:".7rem"};
+const kpi = {background:SU,border:`1px solid ${BO}`,borderRadius:5,padding:".7rem",textAlign:"center"};
+const badge = {fontSize:".57rem",padding:".1rem .35rem",borderRadius:3,fontFamily:f,textTransform:"uppercase",display:"inline-block"};
+const nav = {display:"flex",marginBottom:"1rem",borderBottom:`2px solid ${BO}`,background:SU,borderRadius:"6px 6px 0 0",overflow:"hidden",flexWrap:"wrap"};
+const navBtn = {flex:1,minWidth:"65px",padding:".6rem .25rem",fontSize:".61rem",letterSpacing:".06em",textTransform:"uppercase",fontFamily:f,cursor:"pointer",border:"none",borderBottom:"3px solid transparent",background:"transparent",color:TM,textAlign:"center",marginBottom:"-2px"};
+const navA = {...navBtn,color:A,borderBottom:`3px solid ${A}`,background:"#f5ede0",fontWeight:"bold"};
+const varCard = {background:CA,border:`1px solid ${BL}`,borderRadius:5,padding:".7rem",marginBottom:".5rem"};
+
+// ── TabIngredientes ──
+function TabIng({ings, setIngs}) {
+  const [ed, setEd] = useState({});
+  const [nw, setNw] = useState({nombre:"",unidad:"kg",precio:""});
+  const [show, setShow] = useState(false);
+  const startEd = i => setEd(p=>({...p,[i.id]:{nombre:i.nombre,unidad:i.unidad,precio:String(i.precio)}}));
+  const setEV = (id,k,v) => setEd(p=>({...p,[id]:{...p[id],[k]:v}}));
+  const save = id => { const e=ed[id]; setIngs(p=>p.map(i=>i.id===id?{...i,...e}:i)); setEd(p=>{const q={...p};delete q[id];return q;}); };
+  const cancel = id => setEd(p=>{const q={...p};delete q[id];return q;});
+  const del = id => { setIngs(p=>p.filter(i=>i.id!==id)); cancel(id); };
+  const add = () => { if(!nw.nombre.trim()) return; setIngs(p=>[...p,{id:uid(),...nw}]); setNw({nombre:"",unidad:"kg",precio:""}); setShow(false); };
+  return <>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".7rem"}}>
+      <div style={sec}>Ingredientes — actualiza precios aquí</div>
+      <button style={btnP} onClick={()=>setShow(true)}>+ Añadir</button>
+    </div>
+    <div style={tipI}>💡 Cambia el precio de un ingrediente y se recalcula en todas las recetas al instante.</div>
+    {show && <div style={{...cardHL,marginTop:".7rem"}}>
+      <div style={row}>
+        <div style={{...col,flex:3}}><label style={lbl}>Nombre</label><input style={inp} type="text" value={nw.nombre} onChange={e=>setNw(p=>({...p,nombre:e.target.value}))} placeholder="Ej: Avena"/></div>
+        <div style={col}><label style={lbl}>Unidad</label><select style={sel} value={nw.unidad} onChange={e=>setNw(p=>({...p,unidad:e.target.value}))}>{UNIDS.map(u=><option key={u}>{u}</option>)}</select></div>
+        <div style={col}><label style={lbl}>Precio/unidad ($)</label><input style={inp} type="text" inputMode="decimal" value={nw.precio} onChange={e=>setNw(p=>({...p,precio:e.target.value}))} placeholder="0.00"/></div>
+      </div>
+      <div style={{display:"flex",gap:".4rem"}}><button style={btnP} onClick={add}>Guardar</button><button style={btn} onClick={()=>setShow(false)}>Cancelar</button></div>
+    </div>}
+    <div style={card}>
+      <table style={tbl}><thead><tr><th style={th}>Ingrediente</th><th style={th}>Unidad</th><th style={thR}>Precio/unidad</th><th style={{...th,width:"80px"}}></th></tr></thead>
+        <tbody>{ings.map(i=>{const e=ed[i.id]; return <tr key={i.id} style={{background:e?"#fdf8f0":"transparent"}}>
+          <td style={td}>{e?<input style={{...inpSm,width:"100%"}} type="text" value={e.nombre} onChange={ev=>setEV(i.id,"nombre",ev.target.value)} onKeyDown={ev=>ev.key==="Enter"&&save(i.id)}/>:i.nombre}</td>
+          <td style={tdM}>{e?<select style={{...inpSm,width:"85px"}} value={e.unidad} onChange={ev=>setEV(i.id,"unidad",ev.target.value)}>{UNIDS.map(u=><option key={u}>{u}</option>)}</select>:i.unidad}</td>
+          <td style={{...td,textAlign:"right"}}>{e?<input style={{...inpSm,width:"85px",textAlign:"right"}} type="text" inputMode="decimal" value={e.precio} onChange={ev=>setEV(i.id,"precio",ev.target.value)} onKeyDown={ev=>ev.key==="Enter"&&save(i.id)}/>:<span style={{color:AD,fontWeight:"bold"}}>{$(i.precio)}</span>}</td>
+          <td style={{...td,textAlign:"right"}}>{e?<><button style={{...btnSm,background:A,color:"#fff",border:"none",marginRight:".25rem"}} onClick={()=>save(i.id)}>✓</button><button style={btnSm} onClick={()=>cancel(i.id)}>✕</button></>:<><button style={{...btnSm,marginRight:".25rem"}} onClick={()=>startEd(i)}>✏️</button><button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>del(i.id)}>✕</button></>}
+          </td></tr>;})}
+        </tbody>
+      </table>
+    </div>
+  </>;
+}
+
+// ── TabEmpaques ──
+function TabEmp({emps, setEmps}) {
+  const [ed, setEd] = useState({});
+  const [nw, setNw] = useState({nombre:"",precio:""});
+  const [show, setShow] = useState(false);
+  const startEd = e => setEd(p=>({...p,[e.id]:{nombre:e.nombre,precio:String(e.precio)}}));
+  const setEV = (id,k,v) => setEd(p=>({...p,[id]:{...p[id],[k]:v}}));
+  const save = id => { const e=ed[id]; setEmps(p=>p.map(x=>x.id===id?{...x,...e}:x)); setEd(p=>{const q={...p};delete q[id];return q;}); };
+  const cancel = id => setEd(p=>{const q={...p};delete q[id];return q;});
+  const del = id => { setEmps(p=>p.filter(x=>x.id!==id)); cancel(id); };
+  const add = () => { if(!nw.nombre.trim()) return; setEmps(p=>[...p,{id:uid(),...nw}]); setNw({nombre:"",precio:""}); setShow(false); };
+  return <>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".7rem"}}>
+      <div style={sec}>Empaques</div><button style={btnP} onClick={()=>setShow(true)}>+ Añadir</button>
+    </div>
+    {show && <div style={{...cardHL,marginBottom:".7rem"}}>
+      <div style={row}>
+        <div style={{...col,flex:3}}><label style={lbl}>Descripción</label><input style={inp} type="text" value={nw.nombre} onChange={e=>setNw(p=>({...p,nombre:e.target.value}))} placeholder="Ej: Caja kraft"/></div>
+        <div style={col}><label style={lbl}>Precio ($)</label><input style={inp} type="text" inputMode="decimal" value={nw.precio} onChange={e=>setNw(p=>({...p,precio:e.target.value}))} placeholder="0.00"/></div>
+      </div>
+      <div style={{display:"flex",gap:".4rem"}}><button style={btnP} onClick={add}>Guardar</button><button style={btn} onClick={()=>setShow(false)}>Cancelar</button></div>
+    </div>}
+    <div style={card}>
+      <table style={tbl}><thead><tr><th style={th}>Empaque</th><th style={thR}>Precio/unidad</th><th style={{...th,width:"80px"}}></th></tr></thead>
+        <tbody>{emps.map(e=>{const ed2=ed[e.id]; return <tr key={e.id} style={{background:ed2?"#fdf8f0":"transparent"}}>
+          <td style={td}>{ed2?<input style={{...inpSm,width:"100%"}} type="text" value={ed2.nombre} onChange={ev=>setEV(e.id,"nombre",ev.target.value)} onKeyDown={ev=>ev.key==="Enter"&&save(e.id)}/>:e.nombre}</td>
+          <td style={{...td,textAlign:"right"}}>{ed2?<input style={{...inpSm,width:"85px",textAlign:"right"}} type="text" inputMode="decimal" value={ed2.precio} onChange={ev=>setEV(e.id,"precio",ev.target.value)} onKeyDown={ev=>ev.key==="Enter"&&save(e.id)}/>:<span style={{color:AD,fontWeight:"bold"}}>{$(e.precio)}</span>}</td>
+          <td style={{...td,textAlign:"right"}}>{ed2?<><button style={{...btnSm,background:A,color:"#fff",border:"none",marginRight:".25rem"}} onClick={()=>save(e.id)}>✓</button><button style={btnSm} onClick={()=>cancel(e.id)}>✕</button></>:<><button style={{...btnSm,marginRight:".25rem"}} onClick={()=>startEd(e)}>✏️</button><button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>del(e.id)}>✕</button></>}
+          </td></tr>;})}
+        </tbody>
+      </table>
+    </div>
+  </>;
+}
+
+// ── Editor de receta ──
+function EditorRec({rec, ings, emps, onSave, onCancel}) {
+  const [f, setF] = useState({nombre:rec.nombre,cat:rec.cat,perdida:String(rec.perdida),energia:String(rec.energia),otros:String(rec.otros),notas:rec.notas||""});
+  const [rIngs, setRIngs] = useState(rec.ings.map(l=>({...l,cantStr:String(l.cant)})));
+  const [ops, setOps] = useState(rec.ops.map(o=>({...o})));
+  const [vars, setVars] = useState(rec.vars.map(v=>({...v})));
+  const sf = (k,v) => setF(p=>({...p,[k]:v}));
+  const setRI = (idx,k,v) => setRIngs(p=>p.map((l,i)=>i===idx?{...l,[k]:v}:l));
+  const setOP = (idx,k,v) => setOps(p=>p.map((o,i)=>i===idx?{...o,[k]:v}:o));
+  const setV = (idx,k,v) => setVars(p=>p.map((x,i)=>i===idx?{...x,[k]:v}:x));
+  const save = () => onSave({...rec,...f,
+    ings: rIngs.map(l=>({id:l.id,ingId:l.ingId,cant:l.cantStr})),
+    ops: ops.map(o=>({...o})),
+    vars: vars.map(v=>({...v})),
+  });
+  return <div style={cardHL}>
+    <div style={{...sec,marginBottom:".75rem"}}>Editar receta</div>
+    <div style={row}>
+      <div style={{...col,flex:3}}><label style={lbl}>Nombre</label><input style={inp} type="text" value={f.nombre} onChange={e=>sf("nombre",e.target.value)}/></div>
+      <div style={col}><label style={lbl}>Categoría</label><select style={sel} value={f.cat} onChange={e=>sf("cat",e.target.value)}>{CATS.map(c=><option key={c} value={c}>{CAT[c]}</option>)}</select></div>
+    </div>
+    <div style={row}>
+      <div style={col}><label style={lbl}>Pérdida cocción (%)</label>
+        <input style={inp} type="text" inputMode="decimal" value={f.perdida} onChange={e=>sf("perdida",e.target.value)}/>
+        <div style={{fontSize:".68rem",color:TM,fontFamily:f,marginTop:".2rem"}}>
+          El peso de cada variante es el peso horneado. La app calcula la masa cruda necesaria.
+        </div>
+      </div>
+      <div style={col}><label style={lbl}>Energía $/receta</label><input style={inp} type="text" inputMode="decimal" value={f.energia} onChange={e=>sf("energia",e.target.value)}/></div>
+      <div style={col}><label style={lbl}>Otros costos $/receta</label><input style={inp} type="text" inputMode="decimal" value={f.otros} onChange={e=>sf("otros",e.target.value)}/></div>
+    </div>
+
+    <div style={{...sec,marginTop:".75rem",marginBottom:".55rem"}}>Ingredientes (en su unidad natural)</div>
+    <table style={tbl}><thead><tr><th style={th}>Ingrediente</th><th style={{...thR,width:"120px"}}>Cantidad</th><th style={{...th,width:"40px"}}></th></tr></thead>
+      <tbody>{rIngs.map((li,idx)=>{const ing=ings.find(i=>i.id===li.ingId); return <tr key={li.id}>
+        <td style={td}><select style={{...sel,width:"100%"}} value={li.ingId} onChange={e=>setRI(idx,"ingId",e.target.value)}>{ings.map(i=><option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}</select></td>
+        <td style={{...td,textAlign:"right"}}><div style={{display:"flex",alignItems:"center",gap:".25rem",justifyContent:"flex-end"}}><input style={{...inpSm,width:"70px",textAlign:"right"}} type="text" inputMode="decimal" value={li.cantStr} onChange={e=>setRI(idx,"cantStr",e.target.value)}/><span style={{fontSize:".72rem",color:TD,minWidth:"28px"}}>{ing?.unidad||""}</span></div></td>
+        <td style={{...td,textAlign:"center"}}><button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>setRIngs(p=>p.filter((_,i)=>i!==idx))}>✕</button></td>
+      </tr>;})}
+      </tbody>
+    </table>
+    <button style={{...btn,marginTop:".4rem"}} onClick={()=>setRIngs(p=>[...p,{id:uid(),ingId:ings[0]?.id||"",cantStr:"0"}])}>+ Ingrediente</button>
+
+    <div style={{...sec,marginTop:".75rem",marginBottom:".55rem"}}>Mano de obra</div>
+    {ops.map((op,idx)=><div key={op.id} style={{...row,alignItems:"flex-end"}}>
+      <div style={{...col,flex:2}}><label style={lbl}>Nombre</label><input style={inpSm} type="text" value={op.nombre} onChange={e=>setOP(idx,"nombre",e.target.value)}/></div>
+      <div style={col}><label style={lbl}>Horas</label><input style={inpSm} type="text" inputMode="decimal" value={op.horas} onChange={e=>setOP(idx,"horas",e.target.value)}/></div>
+      <div style={col}><label style={lbl}>$/hora</label><input style={inpSm} type="text" inputMode="decimal" value={op.tarifa} onChange={e=>setOP(idx,"tarifa",e.target.value)}/></div>
+      <div><button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>setOps(p=>p.filter((_,i)=>i!==idx))}>✕</button></div>
+    </div>)}
+    <button style={{...btn,marginBottom:".7rem"}} onClick={()=>setOps(p=>[...p,{id:uid(),nombre:"Operario",horas:"2",tarifa:"3.01"}])}>+ Operario</button>
+
+    <div style={{...sec,marginTop:".55rem",marginBottom:".55rem"}}>Variantes de venta</div>
+    <div style={tipI}>💡 Las piezas a producir se ajustan en la vista de producción. Aquí define los parámetros de cada variante.</div>
+    {vars.map((v,idx)=><div key={v.id} style={{...varCard,marginTop:".5rem"}}>
+      <div style={row}>
+        <div style={{...col,flex:2}}><label style={lbl}>Nombre variante</label><input style={inpSm} type="text" value={v.nombre} onChange={e=>setV(idx,"nombre",e.target.value)}/></div>
+        <div style={col}><label style={lbl}>Peso/pieza (g)</label><input style={inpSm} type="text" inputMode="decimal" value={v.pesoG} onChange={e=>setV(idx,"pesoG",e.target.value)}/></div>
+        <div style={col}><label style={lbl}>Precio venta ($)</label><input style={inpSm} type="text" inputMode="decimal" value={v.precioVenta} onChange={e=>setV(idx,"precioVenta",e.target.value)}/></div>
+      </div>
+      <div style={row}>
+        <div style={col}><label style={lbl}>Empaque</label><select style={sel} value={v.empaqueId} onChange={e=>setV(idx,"empaqueId",e.target.value)}>{emps.map(e=><option key={e.id} value={e.id}>{e.nombre} ({$(e.precio)})</option>)}</select></div>
+        <div style={col}><label style={lbl}>Uds/semana (finanzas)</label><input style={inpSm} type="text" inputMode="numeric" value={v.udsSemana} onChange={e=>setV(idx,"udsSemana",e.target.value)}/></div>
+      </div>
+      <button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>setVars(p=>p.filter((_,i)=>i!==idx))}>✕ Eliminar variante</button>
+    </div>)}
+    <button style={{...btn,marginTop:".4rem"}} onClick={()=>setVars(p=>[...p,{id:uid(),nombre:"Nueva variante",pesoG:"100",piezas:"10",precioVenta:"0.00",empaqueId:emps[0]?.id||"",udsSemana:"0"}])}>+ Variante</button>
+
+    <div style={{marginTop:".75rem"}}><label style={lbl}>Notas</label><input style={inp} type="text" value={f.notas} onChange={e=>sf("notas",e.target.value)}/></div>
+    <div style={{display:"flex",gap:".45rem",marginTop:".8rem"}}><button style={btnP} onClick={save}>💾 Guardar</button><button style={btn} onClick={onCancel}>Cancelar</button></div>
+  </div>;
+}
+
+// ── Vista de producción (Desglose) ──
+function Desglose({rec, ings, emps, onEdit, onDel, onSavePiezas}) {
+  // Estado local de piezas — independiente, solo para este render
+  const [piezas, setPiezas] = useState(() =>
+    Object.fromEntries((rec.vars||[]).map(v => [v.id, String(n(v.piezas)||0)]))
   );
 
-  const totalIngresos = lineas.reduce((a,l)=>a+l.ingreso,0);
-  const totalCostoVar = lineas.reduce((a,l)=>a+l.costoVar,0);
-  const ganBruta = totalIngresos - totalCostoVar;
-  const ganNeta = ganBruta - totalFijos;
-  const margenProm = totalIngresos > 0 ? ganBruta/totalIngresos : 0;
-  const puntoEq = margenProm > 0 ? totalFijos/margenProm : 0;
-  const cobertura = puntoEq > 0 ? Math.min((totalIngresos/puntoEq)*100, 100) : 0;
-
-  return { lineas, totalIngresos, totalCostoVar, ganBruta, ganNeta, totalFijos, puntoEq, cobertura, margenProm };
-}
-
-const C={bg:"#f5f0e8",surface:"#fff",card:"#faf7f2",border:"#ddd5c0",borderLight:"#ede5d0",accent:"#8b5e2a",accentDark:"#6b4520",gold:"#9a7020",text:"#2a1f0e",textMuted:"#6b5a40",textDim:"#9a8a70",success:"#2a5a2a",successBg:"#e8f5e8",warning:"#8a4010",warningBg:"#fff3e8",info:"#2a5a78",infoBg:"#e8f2f8",catC:"#5a7a2a",catCL:"#edf5e0",catS:"#2a5a7a",catSL:"#e0edf5",catP:"#8b5e2a",catPL:"#f5ede0",catO:"#5a5a5a",catOL:"#f0f0f0"};
-const f="Arial";const g="Georgia";
-const S={
-app:{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:`${g},serif`},
-header:{background:C.surface,borderBottom:`2px solid ${C.border}`,padding:"1.25rem 1.5rem .9rem",textAlign:"center"},
-eyebrow:{fontSize:".63rem",letterSpacing:".25em",color:C.accent,textTransform:"uppercase",fontFamily:f,marginBottom:".3rem"},
-title:{fontSize:"clamp(1.3rem,4vw,1.9rem)",fontWeight:"normal",color:C.text,margin:"0 0 .2rem"},
-subtitle:{fontSize:".76rem",color:C.textMuted,fontFamily:f,fontStyle:"italic"},
-main:{maxWidth:"800px",margin:"0 auto",padding:"1rem .9rem 4rem"},
-sec:{fontSize:".61rem",letterSpacing:".2em",textTransform:"uppercase",color:C.accent,fontFamily:f,marginBottom:".75rem",paddingBottom:".32rem",borderBottom:`1px solid ${C.border}`},
-card:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:".95rem",marginBottom:".75rem",boxShadow:"0 1px 3px rgba(0,0,0,.05)"},
-cardHL:{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:6,padding:".95rem",marginBottom:".75rem"},
-lbl:{display:"block",fontSize:".64rem",letterSpacing:".1em",textTransform:"uppercase",color:C.textMuted,fontFamily:f,marginBottom:".28rem"},
-inp:{width:"100%",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,padding:".48rem .6rem",fontSize:".95rem",fontFamily:g,boxSizing:"border-box",outline:"none"},
-inpSm:{background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,padding:".38rem .5rem",fontSize:".85rem",fontFamily:f,boxSizing:"border-box",outline:"none",width:"100%"},
-sel:{width:"100%",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,padding:".42rem .5rem",fontSize:".85rem",fontFamily:f,boxSizing:"border-box",outline:"none"},
-nav:{display:"flex",marginBottom:"1rem",borderBottom:`2px solid ${C.border}`,background:C.surface,borderRadius:"6px 6px 0 0",overflow:"hidden",flexWrap:"wrap"},
-navBtn:{flex:1,minWidth:"70px",padding:".65rem .3rem",fontSize:".63rem",letterSpacing:".06em",textTransform:"uppercase",fontFamily:f,cursor:"pointer",border:"none",borderBottom:"3px solid transparent",background:"transparent",color:C.textMuted,textAlign:"center",marginBottom:"-2px"},
-navA:{color:C.accent,borderBottom:`3px solid ${C.accent}`,background:"#f5ede0",fontWeight:"bold"},
-row:{display:"flex",gap:".6rem",flexWrap:"wrap",marginBottom:".6rem"},
-col:{flex:1,minWidth:"110px"},
-btn:{padding:".48rem .9rem",fontSize:".75rem",fontFamily:f,cursor:"pointer",border:`1px solid ${C.border}`,borderRadius:4,background:C.surface,color:C.textMuted,display:"inline-flex",alignItems:"center",gap:".3rem"},
-btnP:{background:C.accent,border:`1px solid ${C.accentDark}`,color:"#fff"},
-btnD:{background:C.warningBg,border:`1px solid ${C.warning}`,color:C.warning},
-btnSm:{padding:".28rem .55rem",fontSize:".7rem",fontFamily:f,cursor:"pointer",border:`1px solid ${C.border}`,borderRadius:3,background:C.surface,color:C.textMuted},
-bar:{background:C.card,border:`1px solid ${C.borderLight}`,borderRadius:4,padding:".5rem .8rem",marginTop:".4rem",display:"flex",justifyContent:"space-between",alignItems:"center",gap:".3rem"},
-barHL:{background:"#f0ede5",border:`1px solid ${C.accent}`,borderRadius:4,padding:".5rem .8rem",marginTop:".4rem",display:"flex",justifyContent:"space-between",alignItems:"center",gap:".3rem"},
-barLbl:{fontSize:".64rem",color:C.textMuted,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"},
-barVal:{fontSize:".92rem",color:C.gold,fontFamily:g,fontWeight:"bold"},
-tipV:{background:C.successBg,border:`1px solid ${C.success}55`,borderRadius:4,padding:".55rem .8rem",fontSize:".74rem",color:C.success,fontFamily:f,lineHeight:1.5,marginTop:".5rem"},
-tipW:{background:C.warningBg,border:`1px solid ${C.warning}`,borderRadius:4,padding:".55rem .8rem",fontSize:".74rem",color:C.warning,fontFamily:f,lineHeight:1.5,marginTop:".5rem"},
-tipI:{background:C.infoBg,border:`1px solid ${C.info}55`,borderRadius:4,padding:".55rem .8rem",fontSize:".74rem",color:C.info,fontFamily:f,lineHeight:1.5,marginTop:".5rem"},
-tbl:{width:"100%",borderCollapse:"collapse",fontSize:".82rem",fontFamily:f},
-th:{textAlign:"left",fontSize:".6rem",letterSpacing:".1em",textTransform:"uppercase",color:C.textMuted,padding:".3rem .5rem",borderBottom:`2px solid ${C.border}`,fontFamily:f},
-thR:{textAlign:"right",fontSize:".6rem",letterSpacing:".1em",textTransform:"uppercase",color:C.textMuted,padding:".3rem .5rem",borderBottom:`2px solid ${C.border}`,fontFamily:f},
-td:{padding:".38rem .5rem",borderBottom:`1px solid ${C.borderLight}`,color:C.text,verticalAlign:"middle"},
-tdM:{padding:".38rem .5rem",borderBottom:`1px solid ${C.borderLight}`,color:C.textMuted,verticalAlign:"middle"},
-tdR:{padding:".38rem .5rem",borderBottom:`1px solid ${C.borderLight}`,color:C.textMuted,textAlign:"right",verticalAlign:"middle"},
-kpiGrid:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:".55rem",marginBottom:".75rem"},
-kpi:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:".75rem",textAlign:"center"},
-kpiVal:{fontSize:"1.4rem",fontWeight:"bold",color:C.accentDark,fontFamily:g,lineHeight:1,display:"block"},
-kpiLbl:{fontSize:".6rem",color:C.textMuted,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em",marginTop:".15rem",display:"block"},
-badge:{fontSize:".58rem",padding:".1rem .38rem",borderRadius:3,fontFamily:f,textTransform:"uppercase",letterSpacing:".06em",display:"inline-block"},
-varCard:{background:C.card,border:`1px solid ${C.borderLight}`,borderRadius:5,padding:".75rem",marginBottom:".5rem"},
-multBox:{background:"#f0ede5",border:`1px solid ${C.border}`,borderRadius:6,padding:".85rem",marginBottom:".75rem",display:"flex",alignItems:"center",gap:".9rem",flexWrap:"wrap"},
-multInp:{width:"65px",background:C.surface,border:`1px solid ${C.accent}`,borderRadius:4,color:C.accentDark,padding:".4rem .5rem",fontSize:"1.1rem",fontFamily:g,textAlign:"center",outline:"none",fontWeight:"bold"},
-barBg:{background:C.borderLight,borderRadius:4,height:"7px",overflow:"hidden",marginTop:".4rem"},
-
-rowSB:{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".4rem"},
-rowSBS:{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".3rem",marginBottom:".3rem"},
-flexWrap:{display:"flex",flexWrap:"wrap",gap:".9rem"},
-bigNum:{fontSize:"1.5rem",fontWeight:"bold",fontFamily:g,lineHeight:1},
-};
-
-function catC(cat) {
-  if(cat==="confiteria")  return {color:C.catC, bg:C.catCL};
-  if(cat==="conserveria") return {color:C.catS, bg:C.catSL};
-  if(cat==="panaderia")   return {color:C.catP, bg:C.catPL};
-  return {color:C.catO, bg:C.catOL};
-}
-
-function TabIngredientes({ings, setIngs}) {
-  const [edit, setEdit] = useState({});
-  const [nuevo, setNuevo] = useState({nombre:"",unidad:"kg",costo:""});
-  const [show, setShow] = useState(false);
-
-  const startEdit = i => setEdit(p=>({...p,[i.id]:{nombre:i.nombre,unidad:i.unidad,costo:String(i.costo)}}));
-  const setEV = (id,f,v) => setEdit(p=>({...p,[id]:{...p[id],[f]:v}}));
-  const saveRow = id => {
-    const e = edit[id];
-    setIngs(prev=>prev.map(i=>i.id===id?{...i,nombre:e.nombre,unidad:e.unidad,costo:e.costo}:i));
-    setEdit(p=>{const n={...p};delete n[id];return n;});
-  };
-  const cancelRow = id => setEdit(p=>{const n={...p};delete n[id];return n;});
-  const delRow = id => { setIngs(prev=>prev.filter(i=>i.id!==id)); cancelRow(id); };
-  const addRow = () => {
-    if(!nuevo.nombre.trim()) return;
-    setIngs(prev=>[...prev,{id:uid(),nombre:nuevo.nombre.trim(),unidad:nuevo.unidad,costo:nuevo.costo}]);
-    setNuevo({nombre:"",unidad:"kg",costo:""});
-    setShow(false);
+  const setPieza = (id, val) => {
+    const next = {...piezas, [id]: val};
+    setPiezas(next);
+    onSavePiezas(rec.id, next);
   };
 
-  return <>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".75rem"}}>
-      <div style={S.sec}>Ingredientes — precios actualizables</div>
-      <button style={{...S.btn,...S.btnP}} onClick={()=>setShow(true)}>+ Añadir</button>
-    </div>
-    <div style={S.tipI}>💡 Actualiza el precio de un ingrediente aquí y se recalcula automáticamente en todas las recetas que lo usan.</div>
+  // Calcular con piezas actuales
+  const d = calcular(rec, ings, piezas);
+  const cc = catColor(rec.cat);
 
-    {show && <div style={{...S.cardHL,marginTop:".75rem"}}>
-      <div style={S.row}>
-        <div style={{...S.col,flex:3}}><label style={S.lbl}>Nombre</label>
-          <input style={S.inp} type="text" value={nuevo.nombre} onChange={e=>setNuevo(p=>({...p,nombre:e.target.value}))} placeholder="Ej: Avena"/></div>
-        <div style={S.col}><label style={S.lbl}>Unidad</label>
-          <select style={S.sel} value={nuevo.unidad} onChange={e=>setNuevo(p=>({...p,unidad:e.target.value}))}>
-            {UNIDADES.map(u=><option key={u}>{u}</option>)}</select></div>
-        <div style={S.col}><label style={S.lbl}>Precio / unidad ($)</label>
-          <input style={S.inp} type="text" inputMode="decimal" value={nuevo.costo} onChange={e=>setNuevo(p=>({...p,costo:e.target.value}))} placeholder="0.00"/></div>
-      </div>
-      <div style={{display:"flex",gap:"0.5rem"}}>
-        <button style={{...S.btn,...S.btnP}} onClick={addRow}>Guardar</button>
-        <button style={S.btn} onClick={()=>setShow(false)}>Cancelar</button>
-      </div>
-    </div>}
-
-    <div style={S.card}>
-      <table style={S.tbl}>
-        <thead><tr>
-          <th style={S.th}>Ingrediente</th>
-          <th style={S.th}>Unidad</th>
-          <th style={S.thR}>Precio / unidad</th>
-          <th style={{...S.th,width:"90px"}}></th>
-        </tr></thead>
-        <tbody>
-          {ings.map(i=>{
-            const ed = edit[i.id];
-            return <tr key={i.id} style={{background:ed?"#fdf8f0":"transparent"}}>
-              <td style={S.td}>{ed
-                ? <input style={{...S.inpSm,width:"100%"}} type="text" value={ed.nombre}
-                    onChange={e=>setEV(i.id,"nombre",e.target.value)}
-                    onKeyDown={e=>e.key==="Enter"&&saveRow(i.id)}/>
-                : i.nombre}
-              </td>
-              <td style={S.tdM}>{ed
-                ? <select style={{...S.inpSm,width:"90px"}} value={ed.unidad}
-                    onChange={e=>setEV(i.id,"unidad",e.target.value)}>
-                    {UNIDADES.map(u=><option key={u}>{u}</option>)}</select>
-                : i.unidad}
-              </td>
-              <td style={{...S.td,textAlign:"right"}}>{ed
-                ? <input style={{...S.inpSm,width:"90px",textAlign:"right"}} type="text" inputMode="decimal"
-                    value={ed.costo} onChange={e=>setEV(i.id,"costo",e.target.value)}
-                    onKeyDown={e=>e.key==="Enter"&&saveRow(i.id)}/>
-                : <span style={{color:C.accentDark,fontWeight:"bold"}}>{fmt(i.costo)}</span>}
-              </td>
-              <td style={{...S.td,textAlign:"right"}}>
-                {ed
-                  ? <><button style={{...S.btnSm,background:C.accent,color:"#fff",border:"none",marginRight:"0.3rem"}} onClick={()=>saveRow(i.id)}>✓</button>
-                      <button style={S.btnSm} onClick={()=>cancelRow(i.id)}>✕</button></>
-                  : <><button style={{...S.btnSm,marginRight:"0.3rem"}} onClick={()=>startEdit(i)}>✏️</button>
-                      <button style={{...S.btnSm,color:C.warning,borderColor:C.warning}} onClick={()=>delRow(i.id)}>✕</button></>}
-              </td>
-            </tr>;
-          })}
-        </tbody>
-      </table>
-    </div>
-  </>;
-}
-
-function TabEmpaques({emps, setEmps}) {
-  const [edit, setEdit] = useState({});
-  const [nuevo, setNuevo] = useState({nombre:"",costo:""});
-  const [show, setShow] = useState(false);
-
-  const startEdit = e => setEdit(p=>({...p,[e.id]:{nombre:e.nombre,costo:String(e.costo)}}));
-  const setEV = (id,f,v) => setEdit(p=>({...p,[id]:{...p[id],[f]:v}}));
-  const saveRow = id => {
-    const e = edit[id];
-    setEmps(prev=>prev.map(x=>x.id===id?{...x,nombre:e.nombre,costo:e.costo}:x));
-    setEdit(p=>{const n={...p};delete n[id];return n;});
-  };
-  const cancelRow = id => setEdit(p=>{const n={...p};delete n[id];return n;});
-  const delRow = id => { setEmps(prev=>prev.filter(x=>x.id!==id)); cancelRow(id); };
-  const addRow = () => {
-    if(!nuevo.nombre.trim()) return;
-    setEmps(prev=>[...prev,{id:uid(),nombre:nuevo.nombre.trim(),costo:nuevo.costo}]);
-    setNuevo({nombre:"",costo:""});
-    setShow(false);
-  };
-
-  return <>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".75rem"}}>
-      <div style={S.sec}>Empaques</div>
-      <button style={{...S.btn,...S.btnP}} onClick={()=>setShow(true)}>+ Añadir</button>
-    </div>
-
-    {show && <div style={{...S.cardHL,marginBottom:".75rem"}}>
-      <div style={S.row}>
-        <div style={{...S.col,flex:3}}><label style={S.lbl}>Descripción</label>
-          <input style={S.inp} type="text" value={nuevo.nombre} onChange={e=>setNuevo(p=>({...p,nombre:e.target.value}))} placeholder="Ej: Bolsa kraft 200g"/></div>
-        <div style={S.col}><label style={S.lbl}>Costo ($)</label>
-          <input style={S.inp} type="text" inputMode="decimal" value={nuevo.costo} onChange={e=>setNuevo(p=>({...p,costo:e.target.value}))} placeholder="0.00"/></div>
-      </div>
-      <div style={{display:"flex",gap:"0.5rem"}}>
-        <button style={{...S.btn,...S.btnP}} onClick={addRow}>Guardar</button>
-        <button style={S.btn} onClick={()=>setShow(false)}>Cancelar</button>
-      </div>
-    </div>}
-
-    <div style={S.card}>
-      <table style={S.tbl}>
-        <thead><tr>
-          <th style={S.th}>Empaque</th>
-          <th style={S.thR}>Costo / unidad</th>
-          <th style={{...S.th,width:"90px"}}></th>
-        </tr></thead>
-        <tbody>
-          {emps.map(e=>{
-            const ed = edit[e.id];
-            return <tr key={e.id} style={{background:ed?"#fdf8f0":"transparent"}}>
-              <td style={S.td}>{ed
-                ? <input style={{...S.inpSm,width:"100%"}} type="text" value={ed.nombre}
-                    onChange={ev=>setEV(e.id,"nombre",ev.target.value)}
-                    onKeyDown={ev=>ev.key==="Enter"&&saveRow(e.id)}/>
-                : e.nombre}
-              </td>
-              <td style={{...S.td,textAlign:"right"}}>{ed
-                ? <input style={{...S.inpSm,width:"90px",textAlign:"right"}} type="text" inputMode="decimal"
-                    value={ed.costo} onChange={ev=>setEV(e.id,"costo",ev.target.value)}
-                    onKeyDown={ev=>ev.key==="Enter"&&saveRow(e.id)}/>
-                : <span style={{color:C.accentDark,fontWeight:"bold"}}>{fmt(e.costo)}</span>}
-              </td>
-              <td style={{...S.td,textAlign:"right"}}>
-                {ed
-                  ? <><button style={{...S.btnSm,background:C.accent,color:"#fff",border:"none",marginRight:"0.3rem"}} onClick={()=>saveRow(e.id)}>✓</button>
-                      <button style={S.btnSm} onClick={()=>cancelRow(e.id)}>✕</button></>
-                  : <><button style={{...S.btnSm,marginRight:"0.3rem"}} onClick={()=>startEdit(e)}>✏️</button>
-                      <button style={{...S.btnSm,color:C.warning,borderColor:C.warning}} onClick={()=>delRow(e.id)}>✕</button></>}
-              </td>
-            </tr>;
-          })}
-        </tbody>
-      </table>
-    </div>
-  </>;
-}
-
-function EditorReceta({rec, ings, emps, onSave, onCancel}) {
-  const [f, setF] = useState({
-    nombre:rec.nombre, categoria:rec.categoria, perdida:String(rec.perdida), energia:String(rec.energia), otrosCostos:String(rec.otrosCostos), notas:rec.notas||"", });
-  const [lines, setLines] = useState(rec.ingredientes.map(l=>({...l,cantStr:String(l.cant)})));
-  const [ops, setOps] = useState((rec.operarios||[]).map(o=>({...o})));
-  const [vars, setVars] = useState((rec.variantes||[]).map(v=>({...v,pesoGStr:String(v.pesoG),pvpStr:String(v.precioVenta),semsStr:String(v.unidadesSemana||0)})));
-
-  const sf = (k,v) => setF(p=>({...p,[k]:v}));
-  const setLC = (idx,k,v) => setLines(p=>p.map((l,i)=>i===idx?{...l,[k]:v}:l));
-  const setOC = (idx,k,v) => setOps(p=>p.map((o,i)=>i===idx?{...o,[k]:v}:o));
-  const setVC = (idx,k,v) => setVars(p=>p.map((v2,i)=>i===idx?{...v2,[k]:v}:v2));
-
-  const save = () => onSave({
-    ...rec, nombre:f.nombre, categoria:f.categoria, perdida:f.perdida, energia:f.energia, otrosCostos:f.otrosCostos, notas:f.notas, ingredientes: lines.map(l=>({id:l.id,ingId:l.ingId,cant:l.cantStr})), operarios: ops.map(o=>({...o})), variantes: vars.map(v=>({
-      id:v.id, nombre:v.nombre, pesoG:v.pesoGStr, empaqueId:v.empaqueId, precioVenta:v.pvpStr, unidadesSemana:v.semsStr, })), });
-
-  return <div style={S.cardHL}>
-    <div style={{...S.sec,marginBottom:"0.8rem"}}>Editar receta</div>
-
-    {/* Datos generales */}
-    <div style={S.row}>
-      <div style={{...S.col,flex:3}}><label style={S.lbl}>Nombre del producto</label>
-        <input style={S.inp} type="text" value={f.nombre} onChange={e=>sf("nombre",e.target.value)}/></div>
-      <div style={S.col}><label style={S.lbl}>Categoría</label>
-        <select style={S.sel} value={f.categoria} onChange={e=>sf("categoria",e.target.value)}>
-          {CATS.map(c=><option key={c} value={c}>{CAT_LABEL[c]}</option>)}</select></div>
-    </div>
-    <div style={S.row}>
-      <div style={S.col}><label style={S.lbl}>Pérdida cocción (%)</label>
-        <input style={S.inp} type="text" inputMode="decimal" value={f.perdida} onChange={e=>sf("perdida",e.target.value)}/></div>
-      <div style={S.col}><label style={S.lbl}>Energía $ / batch</label>
-        <input style={S.inp} type="text" inputMode="decimal" value={f.energia} onChange={e=>sf("energia",e.target.value)}/></div>
-      <div style={S.col}><label style={S.lbl}>Otros costos $ / batch</label>
-        <input style={S.inp} type="text" inputMode="decimal" value={f.otrosCostos} onChange={e=>sf("otrosCostos",e.target.value)}/></div>
-    </div>
-
-    {/* Ingredientes */}
-    <div style={{...S.sec,marginTop:".8rem",marginBottom:".6rem"}}>Ingredientes</div>
-    <table style={S.tbl}>
-      <thead><tr>
-        <th style={S.th}>Ingrediente</th>
-        <th style={{...S.thR,width:"110px"}}>Cantidad</th>
-        <th style={{...S.th,width:"50px"}}></th>
-      </tr></thead>
-      <tbody>
-        {lines.map((li,idx)=>{
-          const ing = ings.find(i=>i.id===li.ingId);
-          return <tr key={li.id}>
-            <td style={S.td}>
-              <select style={S.sel} value={li.ingId} onChange={e=>setLC(idx,"ingId",e.target.value)}>
-                {ings.map(i=><option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
-              </select>
-            </td>
-            <td style={{...S.td,textAlign:"right"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"0.3rem",justifyContent:"flex-end"}}>
-                <input style={{...S.inpSm,width:"75px",textAlign:"right"}} type="text" inputMode="decimal"
-                  value={li.cantStr} onChange={e=>setLC(idx,"cantStr",e.target.value)}/>
-                <span style={{fontSize:".75rem",color:C.textDim,fontFamily:f,minWidth:"30px"}}>{ing?.unidad||""}</span>
-              </div>
-            </td>
-            <td style={{...S.td,textAlign:"center"}}>
-              <button style={{...S.btnSm,color:C.warning,borderColor:C.warning}}
-                onClick={()=>setLines(p=>p.filter((_,i)=>i!==idx))}>✕</button>
-            </td>
-          </tr>;
-        })}
-      </tbody>
-    </table>
-    <button style={{...S.btn,marginTop:".4rem"}}
-      onClick={()=>setLines(p=>[...p,{id:uid(),ingId:ings[0]?.id||"",cantStr:"0"}])}>+ Ingrediente</button>
-
-    {/* Operarios */}
-    <div style={{...S.sec,marginTop:".8rem",marginBottom:".6rem"}}>Mano de obra</div>
-    {ops.map((op,idx)=>(
-      <div key={op.id} style={{...S.row,alignItems:"flex-end"}}>
-        <div style={{...S.col,flex:2}}><label style={S.lbl}>Nombre</label>
-          <input style={S.inpSm} type="text" value={op.nombre} onChange={e=>setOC(idx,"nombre",e.target.value)}/></div>
-        <div style={S.col}><label style={S.lbl}>Horas</label>
-          <input style={S.inpSm} type="text" inputMode="decimal" value={op.horas} onChange={e=>setOC(idx,"horas",e.target.value)}/></div>
-        <div style={S.col}><label style={S.lbl}>$/hora</label>
-          <input style={S.inpSm} type="text" inputMode="decimal" value={op.tarifa} onChange={e=>setOC(idx,"tarifa",e.target.value)}/></div>
-        <div><button style={{...S.btnSm,color:C.warning,borderColor:C.warning}}
-          onClick={()=>setOps(p=>p.filter((_,i)=>i!==idx))}>✕</button></div>
-      </div>
-    ))}
-    <button style={{...S.btn,marginBottom:".75rem"}}
-      onClick={()=>setOps(p=>[...p,{id:uid(),nombre:"Operario",horas:"2",tarifa:"3.01"}])}>+ Operario</button>
-
-    {/* Variantes */}
-    <div style={{...S.sec,marginTop:".6rem",marginBottom:".6rem"}}>Variantes de venta (tamaños)</div>
-    <div style={S.tipI}>💡 Misma receta, distintos tamaños. El costo se calcula automáticamente por peso.</div>
-    {vars.map((v,idx)=>(
-      <div key={v.id} style={{...S.varCard,marginTop:".5rem"}}>
-        <div style={S.row}>
-          <div style={{...S.col,flex:2}}><label style={S.lbl}>Nombre de la variante</label>
-            <input style={S.inpSm} type="text" value={v.nombre} onChange={e=>setVC(idx,"nombre",e.target.value)} placeholder="Ej: Paquete 140g"/></div>
-          <div style={S.col}><label style={S.lbl}>Peso por unidad (g)</label>
-            <input style={S.inpSm} type="text" inputMode="decimal" value={v.pesoGStr} onChange={e=>setVC(idx,"pesoGStr",e.target.value)}/></div>
-        </div>
-        <div style={S.row}>
-          <div style={S.col}><label style={S.lbl}>Empaque</label>
-            <select style={S.sel} value={v.empaqueId} onChange={e=>setVC(idx,"empaqueId",e.target.value)}>
-              {emps.map(e=><option key={e.id} value={e.id}>{e.nombre} ({fmt(e.costo)})</option>)}
-            </select></div>
-          <div style={S.col}><label style={S.lbl}>Precio de venta ($)</label>
-            <input style={S.inpSm} type="text" inputMode="decimal" value={v.pvpStr} onChange={e=>setVC(idx,"pvpStr",e.target.value)}/></div>
-          <div style={S.col}><label style={S.lbl}>Unidades / semana</label>
-            <input style={S.inpSm} type="text" inputMode="numeric" value={v.semsStr} onChange={e=>setVC(idx,"semsStr",e.target.value)}/></div>
-        </div>
-        <button style={{...S.btnSm,color:C.warning,borderColor:C.warning}}
-          onClick={()=>setVars(p=>p.filter((_,i)=>i!==idx))}>✕ Eliminar variante</button>
-      </div>
-    ))}
-    <button style={{...S.btn,marginTop:".4rem"}}
-      onClick={()=>setVars(p=>[...p,{id:uid(),nombre:"Nueva variante",pesoGStr:"100",empaqueId:emps[0]?.id||"",pvpStr:"0",semsStr:"0"}])}>+ Variante</button>
-
-    <div style={{marginTop:".8rem"}}><label style={S.lbl}>Notas</label>
-      <input style={S.inp} type="text" value={f.notas} onChange={e=>sf("notas",e.target.value)}/></div>
-
-    <div style={{display:"flex",gap:"0.5rem",marginTop:"0.85rem"}}>
-      <button style={{...S.btn,...S.btnP}} onClick={save}>💾 Guardar</button>
-      <button style={S.btn} onClick={onCancel}>Cancelar</button>
-    </div>
-  </div>;
-}
-
-function Desglose({rec, ings, emps, onEdit, onDel}) {
-  const [multStr, setMultStr] = useState("1");
-  const mult = Math.max(0.1, toN(multStr)||1);
-  const d = calcReceta(rec, ings, emps, mult);
-  const cc = catC(rec.categoria);
-
-  return <div style={S.card}>
+  return <div style={card}>
     {/* Cabecera */}
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"0.4rem",marginBottom:"0.7rem"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:".4rem",marginBottom:".65rem"}}>
       <div>
-        <span style={{fontSize:".95rem",fontWeight:"500",color:C.text}}>{rec.nombre}</span>
-        <span style={{...S.badge,background:cc.bg,color:cc.color,marginLeft:"0.5rem"}}>{CAT_LABEL[rec.categoria]}</span>
+        <span style={{fontSize:".92rem",fontWeight:"500",color:TX}}>{rec.nombre}</span>
+        <span style={{...badge,background:cc.bg,color:cc.c,marginLeft:".45rem"}}>{CAT[rec.cat]}</span>
       </div>
-      <div style={{display:"flex",gap:"0.4rem"}}>
-        <button style={{...S.btn,...S.btnP}} onClick={onEdit}>✏️ Editar</button>
-        <button style={{...S.btn,...S.btnD}} onClick={onDel}>Eliminar</button>
+      <div style={{display:"flex",gap:".35rem"}}>
+        <button style={btnP} onClick={onEdit}>✏️ Editar</button>
+        <button style={btnD} onClick={onDel}>Eliminar</button>
       </div>
     </div>
 
-    {/* Multiplicador */}
-    <div style={S.multBox}>
-      <div>
-        <div style={S.barLbl}>Multiplicador de batch</div>
-        <input style={S.multInp} type="text" inputMode="decimal" value={multStr}
-          onChange={e=>setMultStr(e.target.value)}
-          onBlur={e=>setMultStr(String(Math.max(0.1,toN(e.target.value)||1)))}/>
-      </div>
-      <div style={{flex:1,fontSize:".8rem",fontFamily:f,color:C.textMuted}}>
-        <div>Peso bruto: <strong style={{color:C.text}}>{d.pesoBrutoTotal.toLocaleString()} g</strong>
-          <span style={{marginLeft:"0.5rem"}}>Pérdida {rec.perdida}%</span></div>
-        <div style={{marginTop:"0.2rem"}}>Peso neto: <strong style={{color:C.accentDark}}>{d.pesoNetoTotal.toLocaleString()} g</strong></div>
-      </div>
+    {/* Piezas por variante */}
+    <div style={{...sec,marginBottom:".5rem"}}>Piezas a producir por variante</div>
+    {(rec.vars||[]).map(v => {
+      const emp = emps.find(e=>e.id===v.empaqueId)||{nombre:"Sin empaque",precio:"0"};
+      const pNum = n(piezas[v.id]||0);
+      const gramosNetos = pNum * n(v.pesoG);
+      return <div key={v.id} style={{...varCard,display:"flex",alignItems:"center",gap:".75rem",flexWrap:"wrap"}}>
+        <div style={{minWidth:"120px"}}>
+          <div style={{fontSize:".82rem",fontWeight:"500",color:TX}}>{v.nombre}</div>
+          <div style={{fontSize:".7rem",color:TM,fontFamily:f}}>{v.pesoG}g · {emp.nombre}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:".4rem"}}>
+          <label style={{...lbl,marginBottom:0,fontSize:".68rem"}}>Piezas:</label>
+          <input
+            style={{width:"65px",background:SU,border:`2px solid ${A}`,borderRadius:4,color:AD,padding:".35rem .4rem",fontSize:"1.1rem",fontFamily:g,textAlign:"center",outline:"none",fontWeight:"bold"}}
+            type="text" inputMode="numeric"
+            value={piezas[v.id]||"0"}
+            onChange={e => setPieza(v.id, e.target.value)}
+          />
+        </div>
+        <div style={{fontSize:".75rem",color:TM,fontFamily:f}}>
+          {(()=>{
+            const perdidaV = n(rec.perdida||0)/100;
+            const pesoCrudo = perdidaV < 1 ? Math.round(n(v.pesoG)/(1-perdidaV)) : n(v.pesoG);
+            return pNum > 0
+              ? `${n(v.pesoG)}g horneado · ${pesoCrudo}g crudo · total ${(pNum*pesoCrudo).toLocaleString()}g`
+              : `${n(v.pesoG)}g horneado → ${pesoCrudo}g crudo`;
+          })()}
+        </div>
+      </div>;
+    })}
+
+
+    {/* Resumen de masa */}
+    <div style={{...sec,marginBottom:".4rem"}}>Masa necesaria</div>
+    <div style={{...tipI,marginBottom:".5rem"}}>💡 Peso introducido = peso <strong>horneado</strong>. La app calcula la masa cruda necesaria con {rec.perdida}% de pérdida por cocción.</div>
+    <div style={{display:"flex",gap:".55rem",flexWrap:"wrap",marginBottom:".65rem"}}>
+      {[["Masa cruda total",`${d.totalBruto.toLocaleString()} g`],[`Pérdida ${rec.perdida}%`,`−${(d.totalBruto-d.totalNeto).toLocaleString()} g`],[`Peso horneado`,`${d.totalNeto.toLocaleString()} g`],[`Factor ×base`,`×${n(d.factor).toFixed(2)}`]].map(([l,v])=>
+        <div key={l} style={{background:CA,border:`1px solid ${BL}`,borderRadius:4,padding:".4rem .6rem",flex:1,minWidth:"90px"}}>
+          <div style={{fontSize:".58rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".07em"}}>{l}</div>
+          <div style={{fontSize:".9rem",fontWeight:"bold",color:AD,fontFamily:g}}>{v}</div>
+        </div>
+      )}
     </div>
 
-    {/* Ingredientes */}
-    <div style={{...S.sec,marginBottom:".5rem"}}>Ingredientes</div>
-    <table style={S.tbl}>
-      <thead><tr>
-        <th style={S.th}>Ingrediente</th>
-        <th style={S.thR}>Cant/batch</th>
-        <th style={S.thR}>Total ×{mult}</th>
-        <th style={S.thR}>$/unidad</th>
-        <th style={S.thR}>Costo</th>
-      </tr></thead>
-      <tbody>
-        {d.lineasIng.map((li,i)=>(
-          <tr key={i}>
-            <td style={S.td}>{li.nombre}</td>
-            <td style={S.tdR}>{li.cant} {li.unidad}</td>
-            <td style={S.tdR}>{(li.cant*mult).toFixed(3)} {li.unidad}</td>
-            <td style={S.tdR}>{fmt(li.costoUnit)}</td>
-            <td style={{...S.td,textAlign:"right",color:C.accentDark,fontWeight:"bold"}}>{fmt(li.costoTotal)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    {/* Ingredientes escalados */}
+    <div style={{...sec,marginBottom:".4rem"}}>Ingredientes necesarios</div>
+    <table style={tbl}><thead><tr>
+      <th style={th}>Ingrediente</th>
+      <th style={thR}>Cant. base</th>
+      <th style={thR}>Total necesario</th>
+      <th style={thR}>Costo</th>
+    </tr></thead><tbody>
+      {d.lineasIng.map((li,i)=><tr key={i}>
+        <td style={td}>{li.nombre}</td>
+        <td style={tdR}>{li.cantBase} {li.unidad}</td>
+        <td style={tdR}><strong style={{color:AD}}>{n(li.cantTotal).toFixed(3)} {li.unidad}</strong></td>
+        <td style={{...td,textAlign:"right",color:AD,fontWeight:"bold"}}>{$(li.costo)}</td>
+      </tr>)}
+    </tbody></table>
 
     {/* Costos de producción */}
-    <div style={{...S.sec,marginTop:"0.85rem",marginBottom:".5rem"}}>Costos de producción</div>
-    {[
-      ["Ingredientes", d.costoIngTotal], ["Energía", d.costoEnergiaTotal], ...(rec.operarios||[]).map(op=>[`${op.nombre} (${op.horas}h × $${op.tarifa}/h)`, toN(op.horas)*toN(op.tarifa)*mult]), ...(toN(rec.otrosCostos)>0 ? [["Otros costos", d.costoOtrosTotal]] : []), ].map(([l,v])=>(
-      <div key={l} style={S.bar}><span style={S.barLbl}>{l}</span><span style={S.barVal}>{fmt(v)}</span></div>
-    ))}
-    <div style={S.barHL}>
-      <span style={{...S.barLbl,color:C.accentDark,fontWeight:"bold"}}>Subtotal producción (sin empaque)</span>
-      <span style={{...S.barVal,color:C.accentDark}}>{fmt(d.costoIngTotal+d.costoEnergiaTotal+d.costoMOTotal+d.costoOtrosTotal)}</span>
-    </div>
+    <div style={{...sec,marginTop:".75rem",marginBottom:".4rem"}}>Costos de producción</div>
+    {[["Ingredientes",d.costoIng],["Energía",d.costoEnergia],["Mano de obra",d.costoMO],...(n(rec.otros)>0?[["Otros",d.costoOtros]]:[])].map(([l,v])=>
+      <div key={l} style={bar}><span style={{fontSize:".62rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>{l}</span><span style={{fontSize:".88rem",color:G,fontFamily:g,fontWeight:"bold"}}>{$(v)}</span></div>
+    )}
+    <div style={barHL}><span style={{fontSize:".62rem",color:AD,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em",fontWeight:"bold"}}>Subtotal producción</span><span style={{fontSize:".92rem",color:AD,fontFamily:g,fontWeight:"bold"}}>{$(d.costoProduccion)}</span></div>
 
-    {/* Variantes */}
-    <div style={{...S.sec,marginTop:"0.85rem",marginBottom:".6rem"}}>Variantes de venta</div>
-    {d.variantes.map(v=>(
-      <div key={v.id} style={S.varCard}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"0.3rem",marginBottom:".5rem"}}>
-          <strong style={{fontSize:".88rem",color:C.text}}>{v.nombre}</strong>
-          <span style={{fontSize:".78rem",color:C.textMuted,fontFamily:f}}>{v.emp.nombre} — {fmt(v.emp.costo)}/u</span>
+    {/* Por variante */}
+    <div style={{...sec,marginTop:".75rem",marginBottom:".5rem"}}>Por variante</div>
+    {d.variantes.filter(v=>v.piezasN>0).map(v=>
+      <div key={v.id} style={{...varCard,marginBottom:".5rem"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".45rem",flexWrap:"wrap",gap:".3rem"}}>
+          <strong style={{fontSize:".85rem",color:TX}}>{v.nombre}</strong>
+          <span style={{fontSize:".72rem",color:TM,fontFamily:f}}>{v.emp.nombre} · {$(v.costoEmp)}/u</span>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"0.4rem",marginBottom:".4rem"}}>
-          {[
-            ["Peso/unidad", `${v.pesoG} g`], ["Piezas del batch", `${v.piezasTotal}`], ["Empaque total", fmt(v.costoEmpTotal)], ["Costo por pieza", fmt(v.costoPorPieza)], ].map(([l,val])=>(
-            <div key={l} style={{background:C.bg,borderRadius:4,padding:"0.4rem 0.6rem"}}>
-              <div style={{fontSize:".6rem",color:C.textMuted,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>{l}</div>
-              <div style={{fontSize:".92rem",fontWeight:"bold",color:C.accentDark,fontFamily:g}}>{val}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:".38rem",marginBottom:".45rem"}}>
+          {[["Piezas",v.piezasN],["Gramos netos",`${v.gramosNetos.toLocaleString()}g`],["Costo/pieza",$(v.costoPieza)],["Precio venta",$(v.pvp)]].map(([l,val])=>
+            <div key={l} style={{background:BG,borderRadius:4,padding:".38rem .55rem"}}>
+              <div style={{fontSize:".58rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".07em"}}>{l}</div>
+              <div style={{fontSize:".88rem",fontWeight:"bold",color:AD,fontFamily:g}}>{val}</div>
             </div>
-          ))}
+          )}
         </div>
-        <div style={{background:"#f0ede5",border:`1px solid ${C.accent}`,borderRadius:5,padding:".75rem",textAlign:"center"}}>
-          <div style={{display:"flex",gap:"1rem",justifyContent:"center",flexWrap:"wrap"}}>
-            <div>
-              <div style={{fontSize:"1.5rem",fontWeight:"bold",color:C.accentDark,fontFamily:g,lineHeight:1}}>{fmt(v.pvp)}</div>
-              <div style={{fontSize:".62rem",color:C.textMuted,fontFamily:f}}>precio de venta</div>
-            </div>
-            <div>
-              <div style={{fontSize:"1.5rem",fontWeight:"bold",color:v.gananciaPorPieza>=0?C.success:C.warning,fontFamily:g,lineHeight:1}}>{fmt(v.gananciaPorPieza)}</div>
-              <div style={{fontSize:".62rem",color:C.textMuted,fontFamily:f}}>ganancia/pieza</div>
-            </div>
-            <div>
-              <div style={{fontSize:"1.5rem",fontWeight:"bold",color:v.gananciaTotal>=0?C.success:C.warning,fontFamily:g,lineHeight:1}}>{fmt(v.gananciaTotal)}</div>
-              <div style={{fontSize:".62rem",color:C.textMuted,fontFamily:f}}>ganancia total batch</div>
-            </div>
-            <div>
-              <div style={{fontSize:"1.5rem",fontWeight:"bold",color:v.margen>=40?C.success:v.margen>=20?C.gold:C.warning,fontFamily:g,lineHeight:1}}>{fmtP(v.margen)}</div>
-              <div style={{fontSize:".62rem",color:C.textMuted,fontFamily:f}}>margen</div>
-            </div>
+        <div style={{background:"#f0ede5",border:`1px solid ${A}`,borderRadius:5,padding:".65rem",textAlign:"center"}}>
+          <div style={{display:"flex",gap:".9rem",justifyContent:"center",flexWrap:"wrap"}}>
+            <div><div style={{fontSize:"1.35rem",fontWeight:"bold",color:v.ganPieza>=0?OK:WA,fontFamily:g,lineHeight:1}}>{$(v.ganPieza)}</div><div style={{fontSize:".6rem",color:TM,fontFamily:f}}>ganancia/pieza</div></div>
+            <div><div style={{fontSize:"1.35rem",fontWeight:"bold",color:v.ganTotal>=0?OK:WA,fontFamily:g,lineHeight:1}}>{$(v.ganTotal)}</div><div style={{fontSize:".6rem",color:TM,fontFamily:f}}>ganancia total</div></div>
+            <div><div style={{fontSize:"1.35rem",fontWeight:"bold",color:v.margen>=40?OK:v.margen>=20?G:WA,fontFamily:g,lineHeight:1}}>{P(v.margen)}</div><div style={{fontSize:".6rem",color:TM,fontFamily:f}}>margen</div></div>
           </div>
         </div>
-        {toN(v.unidadesSemana)>0 && (
-          <div style={{...S.tipV,marginTop:".4rem"}}>📦 {v.unidadesSemana} unidades/semana en finanzas</div>
-        )}
       </div>
-    ))}
-    {rec.notas ? <div style={S.tipI}>📝 {rec.notas}</div> : null}
+    )}
+
+    {/* Totales */}
+    <div style={{...barHL,marginTop:".5rem"}}><span style={{fontSize:".62rem",color:AD,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em",fontWeight:"bold"}}>Ingreso total</span><span style={{fontSize:".92rem",color:AD,fontFamily:g,fontWeight:"bold"}}>{$(d.ingresoTotal)}</span></div>
+    <div style={{...bar,background:d.ganTotal>=0?OB:WB,border:`1px solid ${d.ganTotal>=0?OK:WA}`,marginTop:".35rem"}}>
+      <span style={{fontSize:".62rem",fontFamily:f,textTransform:"uppercase",letterSpacing:".08em",fontWeight:"bold",color:d.ganTotal>=0?OK:WA}}>Ganancia neta batch</span>
+      <span style={{fontSize:".92rem",fontFamily:g,fontWeight:"bold",color:d.ganTotal>=0?OK:WA}}>{$(d.ganTotal)}</span>
+    </div>
+    {rec.notas?<div style={tipI}>📝 {rec.notas}</div>:null}
   </div>;
 }
 
-export default function Recetas() {
-  const [tab, setTab]     = useState("recetas");
+// ── APP ──
+export default function App() {
+  const [tab, setTab] = useState("recetas");
   const [loading, setLoading] = useState(true);
-  const [ings, setIngs]   = useState(ING_INI);
-  const [emps, setEmps]   = useState(EMP_INI);
-  const [recs, setRecs]   = useState(REC_INI);
-  const [cf, setCf]       = useState(CF_INI);
+  const [ings, setIngs] = useState(ING0);
+  const [emps, setEmps] = useState(EMP0);
+  const [recs, setRecs] = useState(REC0);
+  const [cf, setCf] = useState(CF0);
   const [editId, setEditId] = useState(null);
   const [viewId, setViewId] = useState(null);
 
-  // Cargar datos
   useEffect(()=>{
     (async()=>{
-      const [i,e,r,c] = await Promise.all([
-        storageGet(SK.ing), storageGet(SK.emp), storageGet(SK.rec), storageGet(SK.cf), ]);
-      if(i) setIngs(i);
-      if(e) setEmps(e);
-      if(r) setRecs(r);
-      if(c) setCf(c);
+      const [i,e,r,c] = await Promise.all([sGet(SK.ing),sGet(SK.emp),sGet(SK.rec),sGet(SK.cf)]);
+      if(i) setIngs(i); if(e) setEmps(e); if(r) setRecs(r); if(c) setCf(c);
       setLoading(false);
     })();
   },[]);
+  useEffect(()=>{ if(!loading) sSet(SK.ing,ings); },[ings,loading]);
+  useEffect(()=>{ if(!loading) sSet(SK.emp,emps); },[emps,loading]);
+  useEffect(()=>{ if(!loading) sSet(SK.rec,recs); },[recs,loading]);
+  useEffect(()=>{ if(!loading) sSet(SK.cf,cf);   },[cf,loading]);
 
-  // Guardar automáticamente
-  useEffect(()=>{ if(!loading) storageSet(SK.ing, ings); },[ings,loading]);
-  useEffect(()=>{ if(!loading) storageSet(SK.emp, emps); },[emps,loading]);
-  useEffect(()=>{ if(!loading) storageSet(SK.rec, recs); },[recs,loading]);
-  useEffect(()=>{ if(!loading) storageSet(SK.cf, cf);   },[cf, loading]);
-
-  const saveRec = r => {
-    setRecs(prev=>prev.some(x=>x.id===r.id)?prev.map(x=>x.id===r.id?r:x):[...prev,r]);
-    setEditId(null); setViewId(r.id);
-  };
+  const saveRec = r => { setRecs(p=>p.some(x=>x.id===r.id)?p.map(x=>x.id===r.id?r:x):[...p,r]); setEditId(null); setViewId(r.id); };
+  const delRec = id => { setRecs(p=>p.filter(r=>r.id!==id)); setViewId(null); setEditId(null); };
   const newRec = () => {
-    const r = {id:uid(),nombre:"Nueva receta",categoria:"confiteria", perdida:"10",energia:"0.20",otrosCostos:"0",notas:"", ingredientes:[],operarios:[{id:uid(),nombre:"Operario 1",horas:"2",tarifa:"3.01"}], variantes:[{id:uid(),nombre:"Variante 1",pesoG:"100",empaqueId:emps[0]?.id||"",precioVenta:"0",unidadesSemana:"0"}], };
-    setRecs(prev=>[...prev,r]);
-    setEditId(r.id); setViewId(null);
+    const r = {id:uid(),nombre:"Nueva receta",cat:"confiteria",perdida:"10",energia:"0.20",otros:"0",notas:"",
+      ings:[], ops:[{id:uid(),nombre:"Operario 1",horas:"2",tarifa:"3.01"}],
+      vars:[{id:uid(),nombre:"Variante 1",pesoG:"100",piezas:"10",precioVenta:"0.00",empaqueId:emps[0]?.id||"",udsSemana:"0"}]};
+    setRecs(p=>[...p,r]); setEditId(r.id); setViewId(null);
   };
-  const delRec = id => { setRecs(prev=>prev.filter(r=>r.id!==id)); setViewId(null); setEditId(null); };
+  const savePiezas = (recId, piezasMap) => {
+    setRecs(p=>p.map(r=>r.id!==recId?r:{
+      ...r, vars: r.vars.map(v=>({...v, piezas: String(n(piezasMap[v.id])||0)}))
+    }));
+  };
 
-  const fin = useMemo(()=>calcFinanzas(recs,ings,emps,cf),[recs,ings,emps,cf]);
+  // Finanzas
+  const totalFijos = n(cf.sueldo) + (cf.items||[]).reduce((a,x)=>a+n(x.monto),0);
+  const linFin = recs.flatMap(r=>(r.vars||[]).filter(v=>n(v.udsSemana)>0).map(v=>{
+    const piezasMap = Object.fromEntries((r.vars||[]).map(x=>[x.id,x.piezas]));
+    const d = calcular(r, ings, piezasMap);
+    const dv = d.variantes.find(x=>x.id===v.id);
+    if(!dv) return null;
+    const udsMes = n(v.udsSemana)*4;
+    const ingreso = udsMes*n(v.precioVenta);
+    const costoVar = dv.costoPieza*udsMes;
+    const ganBruta = ingreso-costoVar;
+    const margen = ingreso>0?(ganBruta/ingreso)*100:0;
+    return {r,v,dv,udsMes,ingreso,costoVar,ganBruta,margen};
+  }).filter(Boolean));
+  const totIng = linFin.reduce((a,l)=>a+l.ingreso,0);
+  const totCVar = linFin.reduce((a,l)=>a+l.costoVar,0);
+  const ganBruta = totIng-totCVar;
+  const ganNeta = ganBruta-totalFijos;
+  const mProm = totIng>0?ganBruta/totIng:0;
+  const puntoEq = mProm>0?totalFijos/mProm:0;
+  const cobert = puntoEq>0?Math.min((totIng/puntoEq)*100,100):0;
 
-  if(loading) return <div style={S.app}><div style={{textAlign:"center",padding:"3rem",color:C.textMuted,fontFamily:f}}>Cargando datos...</div></div>;
+  if(loading) return <div style={{minHeight:"100vh",background:BG,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:f,color:TM}}>Cargando...</div>;
 
-  return <div style={S.app}>
-    <div style={S.header}>
-      <div style={S.eyebrow}>Gestión de Recetas · Costos · Finanzas</div>
-      <h1 style={S.title}>Recetas & Costos</h1>
-      <p style={S.subtitle}>Confitería · Conservería · Panadería · Datos guardados automáticamente</p>
+  return <div style={{minHeight:"100vh",background:BG,color:TX,fontFamily:`${g},serif`}}>
+    <div style={{background:SU,borderBottom:`2px solid ${BO}`,padding:"1.1rem 1.4rem .8rem",textAlign:"center"}}>
+      <div style={{fontSize:".6rem",letterSpacing:".25em",color:A,textTransform:"uppercase",fontFamily:f,marginBottom:".25rem"}}>Gestión de Recetas · Costos · Finanzas</div>
+      <h1 style={{fontSize:"clamp(1.2rem,4vw,1.8rem)",fontWeight:"normal",color:TX,margin:"0 0 .15rem"}}>Casa Ormaza Velásquez</h1>
+      <p style={{fontSize:".73rem",color:TM,fontFamily:f,fontStyle:"italic"}}>Confitería · Conservería · Panadería Artesanal con Masa Madre Natural</p>
     </div>
 
-    <div style={S.main}>
-      <div style={S.nav}>
-        {[["recetas","📋 Recetas"],["ingredientes","🌾 Ingredientes"],["empaques","📦 Empaques"],["finanzas","📊 Finanzas"]].map(([k,l])=>(
-          <button key={k} style={{...S.navBtn,...(tab===k?S.navA:{})}} onClick={()=>{ setTab(k); setViewId(null); setEditId(null); }}>{l}</button>
-        ))}
+    <div style={{maxWidth:"800px",margin:"0 auto",padding:"1rem .85rem 4rem"}}>
+      <div style={nav}>
+        {[["recetas","📋 Recetas"],["ingredientes","🌾 Ingredientes"],["empaques","📦 Empaques"],["finanzas","📊 Finanzas"]].map(([k,l])=>
+          <button key={k} style={tab===k?navA:navBtn} onClick={()=>{setTab(k);setViewId(null);setEditId(null);}}>{l}</button>
+        )}
       </div>
 
-      {/* ══ RECETAS ══ */}
+      {/* RECETAS */}
       {tab==="recetas" && <>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".75rem"}}>
-          <div style={S.sec}>Catálogo de productos</div>
-          <button style={{...S.btn,...S.btnP}} onClick={newRec}>+ Nueva receta</button>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:".7rem"}}>
+          <div style={sec}>Catálogo de productos</div>
+          <button style={btnP} onClick={newRec}>+ Nueva receta</button>
         </div>
-
         {recs.map(r=>{
-          const cc = catC(r.categoria);
-          if(editId===r.id) return <EditorReceta key={r.id} rec={r} ings={ings} emps={emps}
-            onSave={saveRec} onCancel={()=>{setEditId(null);if(r.nombre==="Nueva receta")delRec(r.id);}}/>;
-
+          const cc=catColor(r.cat);
+          if(editId===r.id) return <EditorRec key={r.id} rec={r} ings={ings} emps={emps} onSave={saveRec} onCancel={()=>{setEditId(null);if(r.nombre==="Nueva receta")delRec(r.id);}}/>;
           if(viewId===r.id) return <div key={r.id}>
-            <Desglose rec={r} ings={ings} emps={emps}
-              onEdit={()=>{setEditId(r.id);setViewId(null);}}
-              onDel={()=>delRec(r.id)}/>
-            <button style={{...S.btn,marginBottom:".75rem",marginTop:"-0.3rem"}} onClick={()=>setViewId(null)}>← Lista</button>
+            <Desglose rec={r} ings={ings} emps={emps} onEdit={()=>{setEditId(r.id);setViewId(null);}} onDel={()=>delRec(r.id)} onSavePiezas={savePiezas}/>
+            <button style={{...btn,marginBottom:".7rem",marginTop:"-.2rem"}} onClick={()=>setViewId(null)}>← Lista</button>
           </div>;
-
-          // Vista de lista
-          const d = calcReceta(r, ings, emps, 1);
-          const mejorVar = d.variantes.reduce((best,v)=>(!best||v.margen>best.margen)?v:best, null);
-          return <div key={r.id} style={{...S.card,cursor:"pointer"}} onClick={()=>{setViewId(r.id);setEditId(null);}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"0.4rem"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"0.5rem",flexWrap:"wrap"}}>
-                <span style={{fontSize:".92rem",fontWeight:"500",color:C.text}}>{r.nombre}</span>
-                <span style={{...S.badge,background:cc.bg,color:cc.color}}>{CAT_LABEL[r.categoria]}</span>
+          // Lista
+          const piezasMap = Object.fromEntries((r.vars||[]).map(v=>[v.id,v.piezas]));
+          const d = calcular(r,ings,piezasMap);
+          const mv = d.variantes.find(v=>v.piezasN>0);
+          return <div key={r.id} style={{...card,cursor:"pointer"}} onClick={()=>{setViewId(r.id);setEditId(null);}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".4rem"}}>
+              <div style={{display:"flex",alignItems:"center",gap:".45rem",flexWrap:"wrap"}}>
+                <span style={{fontSize:".9rem",fontWeight:"500",color:TX}}>{r.nombre}</span>
+                <span style={{...badge,background:cc.bg,color:cc.c}}>{CAT[r.cat]}</span>
               </div>
-              <div style={{display:"flex",gap:"0.8rem",alignItems:"center"}}>
-                {mejorVar && <>
-                  <span style={{fontSize:".8rem",color:C.textMuted,fontFamily:f}}>{mejorVar.piezasUnit} uds/batch</span>
-                  <span style={{fontSize:".88rem",fontWeight:"bold",color:C.accentDark,fontFamily:g}}>{fmt(mejorVar.costoPorPieza)}/u</span>
-                  <span style={{fontSize:".82rem",fontWeight:"bold",color:mejorVar.margen>=40?C.success:mejorVar.margen>=20?C.gold:C.warning,fontFamily:f}}>{fmtP(mejorVar.margen)}</span>
-                </>}
-                <span style={{fontSize:".7rem",color:C.textDim,fontFamily:f}}>ver →</span>
+              <div style={{display:"flex",gap:".75rem",alignItems:"center"}}>
+                {mv&&<><span style={{fontSize:".78rem",color:TM,fontFamily:f}}>{mv.piezasN} uds</span><span style={{fontSize:".85rem",fontWeight:"bold",color:AD,fontFamily:g}}>{$(mv.costoPieza)}/u</span><span style={{fontSize:".8rem",fontWeight:"bold",color:mv.margen>=40?OK:mv.margen>=20?G:WA,fontFamily:f}}>{P(mv.margen)}</span></>}
+                <span style={{fontSize:".68rem",color:TD,fontFamily:f}}>ver →</span>
               </div>
             </div>
-            {r.variantes.length > 1 && (
-              <div style={{fontSize:".72rem",color:C.textMuted,fontFamily:f,marginTop:"0.25rem"}}>
-                {r.variantes.length} variantes: {r.variantes.map(v=>v.nombre).join(" · ")}
-              </div>
-            )}
+            {r.vars.length>1&&<div style={{fontSize:".7rem",color:TM,fontFamily:f,marginTop:".2rem"}}>{r.vars.map(v=>v.nombre).join(" · ")}</div>}
           </div>;
         })}
       </>}
 
-      {/* ══ INGREDIENTES ══ */}
-      {tab==="ingredientes" && <TabIngredientes ings={ings} setIngs={setIngs}/>}
+      {/* INGREDIENTES */}
+      {tab==="ingredientes" && <TabIng ings={ings} setIngs={setIngs}/>}
 
-      {/* ══ EMPAQUES ══ */}
-      {tab==="empaques" && <TabEmpaques emps={emps} setEmps={setEmps}/>}
+      {/* EMPAQUES */}
+      {tab==="empaques" && <TabEmp emps={emps} setEmps={setEmps}/>}
 
-      {/* ══ FINANZAS ══ */}
+      {/* FINANZAS */}
       {tab==="finanzas" && <>
-        {/* Costos fijos */}
-        <div style={S.sec}>Costos fijos mensuales</div>
-        <div style={S.card}>
-          <div style={S.row}>
-            <div style={S.col}><label style={S.lbl}>Tu sueldo mensual ($)</label>
-              <input style={S.inp} type="text" inputMode="decimal" value={cf.sueldo}
-                onChange={e=>setCf(p=>({...p,sueldo:e.target.value}))}/></div>
+        <div style={sec}>Costos fijos mensuales</div>
+        <div style={card}>
+          <div style={row}>
+            <div style={col}><label style={lbl}>Tu sueldo mensual ($)</label><input style={inp} type="text" inputMode="decimal" value={cf.sueldo} onChange={e=>setCf(p=>({...p,sueldo:e.target.value}))}/></div>
           </div>
-          <div style={{...S.sec,marginBottom:".5rem"}}>Gastos administrativos y otros fijos</div>
-          {(cf.items||[]).map((item,idx)=>(
-            <div key={item.id} style={{...S.row,alignItems:"flex-end",marginBottom:".4rem"}}>
-              <div style={{...S.col,flex:3}}>
-                <input style={S.inpSm} type="text" value={item.nombre}
-                  onChange={e=>setCf(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,nombre:e.target.value}:x)}))}/></div>
-              <div style={S.col}>
-                <input style={S.inpSm} type="text" inputMode="decimal" value={item.monto}
-                  onChange={e=>setCf(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,monto:e.target.value}:x)}))}/></div>
-              <div><button style={{...S.btnSm,color:C.warning,borderColor:C.warning}}
-                onClick={()=>setCf(p=>({...p,items:p.items.filter((_,i)=>i!==idx)}))}>✕</button></div>
-            </div>
-          ))}
-          <button style={{...S.btn,marginBottom:".5rem"}}
-            onClick={()=>setCf(p=>({...p,items:[...(p.items||[]),{id:uid(),nombre:"Nuevo gasto",monto:"0"}]}))}>+ Gasto fijo</button>
-          <div style={S.barHL}>
-            <span style={{...S.barLbl,color:C.accentDark,fontWeight:"bold"}}>Total costos fijos / mes</span>
-            <span style={{...S.barVal,color:C.accentDark,fontSize:"1rem"}}>{fmt(fin.totalFijos)}</span>
-          </div>
+          <div style={{...sec,marginBottom:".45rem"}}>Gastos fijos adicionales</div>
+          {(cf.items||[]).map((item,idx)=><div key={item.id} style={{...row,alignItems:"flex-end",marginBottom:".4rem"}}>
+            <div style={{...col,flex:3}}><input style={inpSm} type="text" value={item.nombre} onChange={e=>setCf(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,nombre:e.target.value}:x)}))}/></div>
+            <div style={col}><input style={inpSm} type="text" inputMode="decimal" value={item.monto} onChange={e=>setCf(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,monto:e.target.value}:x)}))}/></div>
+            <div><button style={{...btnSm,color:WA,borderColor:WA}} onClick={()=>setCf(p=>({...p,items:p.items.filter((_,i)=>i!==idx)}))}>✕</button></div>
+          </div>)}
+          <button style={{...btn,marginBottom:".5rem"}} onClick={()=>setCf(p=>({...p,items:[...(p.items||[]),{id:uid(),nombre:"Nuevo gasto",monto:"0"}]}))}>+ Gasto fijo</button>
+          <div style={barHL}><span style={{fontSize:".62rem",color:AD,fontFamily:f,textTransform:"uppercase",fontWeight:"bold"}}>Total fijos/mes</span><span style={{fontSize:".92rem",color:AD,fontFamily:g,fontWeight:"bold"}}>{$(totalFijos)}</span></div>
         </div>
 
-        {/* KPIs */}
-        <div style={S.sec}>Panel financiero mensual</div>
-        <div style={S.kpiGrid}>
-          {[
-            [fmt(fin.totalIngresos),"Ingresos brutos",null], [fmt(fin.totalCostoVar),"Costos variables",null], [fmt(fin.ganBruta),"Ganancia bruta",null], [fmt(fin.ganNeta),"Ganancia neta",fin.ganNeta>=0?C.success:C.warning], ].map(([v,l,col])=>(
-            <div key={l} style={S.kpi}>
-              <span style={{...S.kpiVal,...(col?{color:col}:{})}}>{v}</span>
-              <span style={S.kpiLbl}>{l}</span>
-            </div>
-          ))}
+        <div style={sec}>Panel mensual</div>
+        <div style={kpiG}>
+          {[[$(totIng),"Ingresos brutos",null],[$(totCVar),"Costos variables",null],[$(ganBruta),"Ganancia bruta",null],[$(ganNeta),"Ganancia neta",ganNeta>=0?OK:WA]].map(([v,l,c])=>
+            <div key={l} style={kpi}><span style={{fontSize:"1.35rem",fontWeight:"bold",color:c||AD,fontFamily:g,lineHeight:1,display:"block"}}>{v}</span><span style={{fontSize:".58rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em",marginTop:".12rem",display:"block"}}>{l}</span></div>
+          )}
         </div>
 
-        {/* Punto de equilibrio */}
-        <div style={S.sec}>Punto de equilibrio</div>
-        <div style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:"0.4rem",marginBottom:"0.45rem"}}>
-            <div>
-              <div style={{fontSize:".64rem",color:C.textMuted,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>Ingresos necesarios/mes</div>
-              <div style={{fontSize:"1.35rem",fontWeight:"bold",color:C.accentDark,fontFamily:g}}>{fmt(fin.puntoEq)}</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:".64rem",color:C.textMuted,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>Cobertura actual</div>
-              <div style={{fontSize:"1.35rem",fontWeight:"bold",fontFamily:g,color:fin.cobertura>=100?C.success:C.warning}}>{fmtP(fin.cobertura)}</div>
-            </div>
+        <div style={sec}>Punto de equilibrio</div>
+        <div style={card}>
+          <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:".4rem",marginBottom:".4rem"}}>
+            <div><div style={{fontSize:".6rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>Necesario/mes</div><div style={{fontSize:"1.25rem",fontWeight:"bold",color:AD,fontFamily:g}}>{$(puntoEq)}</div></div>
+            <div style={{textAlign:"right"}}><div style={{fontSize:".6rem",color:TM,fontFamily:f,textTransform:"uppercase",letterSpacing:".08em"}}>Cobertura</div><div style={{fontSize:"1.25rem",fontWeight:"bold",fontFamily:g,color:cobert>=100?OK:WA}}>{P(cobert)}</div></div>
           </div>
-          <div style={S.barBg}>
-            <div style={{height:"100%",borderRadius:4,width:`${fin.cobertura}%`,background:fin.cobertura>=100?C.success:C.warning,transition:"width 0.3s"}}/>
-          </div>
-          {fin.ganNeta>=0
-            ? <div style={S.tipV}>✅ El negocio cubre todos sus costos fijos. Ganancia neta: {fmt(fin.ganNeta)}/mes.</div>
-            : <div style={S.tipW}>⚠️ Faltan {fmt(fin.puntoEq-fin.totalIngresos)}/mes para cubrir los costos fijos.</div>}
+          <div style={{background:BL,borderRadius:4,height:"7px",overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,width:`${cobert}%`,background:cobert>=100?OK:WA,transition:"width .3s"}}/></div>
+          {ganNeta>=0?<div style={tipV}>✅ El negocio cubre todos sus costos. Ganancia neta: {$(ganNeta)}/mes.</div>:<div style={tipW}>⚠️ Faltan {$(puntoEq-totIng)}/mes para cubrir los costos fijos.</div>}
         </div>
 
-        {/* Por producto */}
-        <div style={S.sec}>Por producto / variante</div>
-        <div style={S.card}>
-          {fin.lineas.length===0
-            ? <div style={{color:C.textMuted,fontFamily:f,fontSize:".82rem"}}>Introduce unidades por semana en las variantes de cada receta para ver los números aquí.</div>
-            : fin.lineas.map((l,i)=>{
-              const cc = catC(l.rec.categoria);
-              return <div key={i} style={{marginBottom:"0.9rem",paddingBottom:"0.9rem",borderBottom:`1px solid ${C.borderLight}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"0.3rem",marginBottom:".3rem"}}>
-                  <div>
-                    <span style={{fontSize:".88rem",fontWeight:"500",color:C.text}}>{l.rec.nombre}</span>
-                    <span style={{...S.badge,background:cc.bg,color:cc.color,marginLeft:"0.4rem"}}>{l.v.nombre}</span>
-                  </div>
-                  <span style={{fontSize:".88rem",fontWeight:"bold",color:l.ganBruta>=0?C.success:C.warning,fontFamily:g}}>{fmt(l.ganBruta)}/mes</span>
-                </div>
-                <div style={{display:"flex",gap:"0.9rem",flexWrap:"wrap"}}>
-                  {[
-                    [`${l.udsMes} uds/mes`, null], [`Ingreso ${fmt(l.ingreso)}`, null], [`Costo var. ${fmt(l.costoVar)}`, null], [`${fmtP(l.margen)} margen`, l.margen>=40?C.success:l.margen>=20?C.gold:C.warning], ].map(([v,col])=>(
-                    <span key={v} style={{fontSize:".73rem",color:col||C.textMuted,fontFamily:f}}>{v}</span>
-                  ))}
-                </div>
-              </div>;
-            })
-          }
-        </div>
-
-        {/* Palancas de crecimiento */}
-        <div style={S.sec}>Opciones de crecimiento</div>
-        <div style={S.card}>
-          {[
-            ["Aumentar volumen del producto estrella","El producto con mayor margen genera más ganancia neta por unidad adicional vendida. Identifícalo en la tabla de arriba y enfoca el crecimiento en él."], ["Nuevas variantes de tamaño","Ofrecer el mismo producto en tamaño grande o paquete familiar aumenta el ticket promedio sin aumentar el costo fijo de producción."], ["Reducir costos variables","Revisar precios de ingredientes con proveedores alternativos. Una reducción del 10% en el costo de un ingrediente clave puede mejorar el margen varios puntos."], ["Punto de equilibrio como meta","Si el negocio no cubre costos fijos aún, calcula cuántas unidades adicionales de tu producto más vendido necesitas para llegar al equilibrio."], ].map(([t,x])=>(
-            <div key={t} style={{marginBottom:"0.85rem"}}>
-              <div style={{fontSize:"0.83rem",color:C.accentDark,marginBottom:".2rem",fontWeight:"bold"}}>{t}</div>
-              <div style={{fontSize:".76rem",color:C.textMuted,fontFamily:f,lineHeight:1.5}}>{x}</div>
+        <div style={sec}>Por producto / variante</div>
+        <div style={card}>
+          {linFin.length===0?<div style={{color:TM,fontFamily:f,fontSize:".8rem"}}>Introduce unidades/semana en las variantes de cada receta para ver los números aquí.</div>
+          :linFin.map((l,i)=>{const cc=catColor(l.r.cat); return <div key={i} style={{marginBottom:".85rem",paddingBottom:".85rem",borderBottom:`1px solid ${BL}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:".3rem",marginBottom:".3rem"}}>
+              <div><span style={{fontSize:".85rem",fontWeight:"500",color:TX}}>{l.r.nombre}</span><span style={{...badge,background:cc.bg,color:cc.c,marginLeft:".35rem"}}>{l.v.nombre}</span></div>
+              <span style={{fontSize:".85rem",fontWeight:"bold",color:l.ganBruta>=0?OK:WA,fontFamily:g}}>{$(l.ganBruta)}/mes</span>
             </div>
-          ))}
+            <div style={{display:"flex",gap:".85rem",flexWrap:"wrap"}}>
+              {[[`${l.udsMes} uds/mes`,null],[`Ingreso ${$(l.ingreso)}`,null],[`Costo var. ${$(l.costoVar)}`,null],[`${P(l.margen)} margen`,l.margen>=40?OK:l.margen>=20?G:WA]].map(([v,c])=>
+                <span key={v} style={{fontSize:".72rem",color:c||TM,fontFamily:f}}>{v}</span>
+              )}
+            </div>
+          </div>;})}
         </div>
       </>}
     </div>
